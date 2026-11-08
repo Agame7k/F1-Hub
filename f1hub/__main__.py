@@ -206,6 +206,8 @@ def main(argv=None):
     gu.add_argument("--interval", type=int, default=10)
     gu.add_argument("--session", default="latest")
     gu.add_argument("--no-browser", action="store_true")
+    gu.add_argument("--open-feed", action="store_true",
+                    help="let web pages from anywhere (e.g. an OBS overlay) read the data feed at /api/feed")
     e = sub.add_parser("export")
     e.add_argument("path", nargs="?", default="f1_export.json")
     dr = sub.add_parser("doctor", help="check the setup and say what to fix")
@@ -230,7 +232,8 @@ def main(argv=None):
             return run(args.yes, args.recordings_older_than)
         if args.cmd == "gui":
             from .gui import serve
-            serve(args.year, args.session, args.interval, args.port, not args.no_browser)   # loads the season itself
+            serve(args.year, args.session, args.interval, args.port, not args.no_browser,   # loads the season itself
+                  open_feed=args.open_feed)
             return 0
         if args.cmd == "live":
             from .live import watch

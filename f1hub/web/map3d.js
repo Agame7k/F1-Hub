@@ -208,6 +208,20 @@ function m3dDraw(now, dt) {
       ctx.fillText("BEST", p[0], p[1] - s - 5); ctx.textAlign = "left";
     });
   }
+  const sc = typeof scAt === "function" && MAPOPT.sc ? scAt(T) : null, scp = sc && pr(m3dWorld(g, sc.x, sc.y, lift).p);
+  if (scp) sprite(scp[2], () => {
+    const s = Math.max(4.5, g.w * 0.55 * focal / scp[2]), ph = (now % 900) / 900;
+    ctx.globalAlpha = sc.alpha;
+    ctx.fillStyle = `rgba(255,176,0,${sc.phase === "deploying" && !REDUCED.matches ? 0.25 + 0.3 * Math.sin(ph * Math.PI) : 0.28})`;
+    ctx.beginPath(); ctx.arc(scp[0], scp[1], s * 2, 0, 7); ctx.fill();
+    ctx.fillStyle = "#ffb000"; ctx.strokeStyle = "#fff"; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(scp[0], scp[1], s, 0, 7); ctx.fill(); ctx.stroke();
+    ctx.font = "900 11px 'Titillium Web', system-ui, sans-serif"; ctx.textAlign = "center";
+    const w = ctx.measureText(sc.label).width + 12;
+    ctx.fillStyle = "rgba(11,12,16,.92)"; ctx.strokeStyle = "#ffb000"; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.roundRect ? ctx.roundRect(scp[0] - w / 2, scp[1] - s - 24, w, 17, 3) : ctx.rect(scp[0] - w / 2, scp[1] - s - 24, w, 17); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = "#ffb000"; ctx.fillText(sc.label, scp[0], scp[1] - s - 12); ctx.textAlign = "left"; ctx.globalAlpha = 1;
+  });
   M3D.hits = [];
   const rowOf = {}; D.rows.forEach(r => rowOf[r.number] = r);
   cars.forEach(x => {
@@ -223,7 +237,7 @@ function m3dDraw(now, dt) {
     }
     let dir = null;
     if (back.length) { const dx = p[0] - back[0][0], dy = p[1] - back[0][1], l = Math.hypot(dx, dy); if (l > 0.6) dir = [dx / l, dy / l]; }
-    if (back.length > 1 && dir && !REDUCED.matches) sprite(p[2] + 0.5, () => {
+    if (back.length > 1 && dir && !REDUCED.matches && MAPOPT.tails) sprite(p[2] + 0.5, () => {
       ctx.lineCap = "round";
       let a = p;
       back.forEach((b, i) => {
@@ -234,7 +248,7 @@ function m3dDraw(now, dt) {
     });
     const tyre = rowOf[x.c.number] && TYRE[rowOf[x.c.number].compound];
     M3D.hits.push({n: x.c.number, x: p[0], y: p[1], r: s});
-    lab.push({x: p[0], y: p[1], s, z: p[2], c: x.c, mine});
+    if (MAPOPT.names || mine) lab.push({x: p[0], y: p[1], s, z: p[2], c: x.c, mine});
     sprite(p[2], () => {
       ctx.globalAlpha = x.q.out_in ? 0.35 : 1;
       if (base) { ctx.fillStyle = "rgba(0,0,0,.45)"; ctx.beginPath(); ctx.ellipse(base[0], base[1], s * 1.25, s * 0.55, 0, 0, 7); ctx.fill(); }
@@ -250,7 +264,7 @@ function m3dDraw(now, dt) {
         ctx.fillStyle = gr;
       }
       ctx.beginPath(); ctx.arc(p[0], p[1], s, 0, 7); ctx.fill(); ctx.stroke();
-      if (tyre && tyre !== TYRE.UNKNOWN) { ctx.strokeStyle = tyre; ctx.lineWidth = Math.max(1.5, s * 0.22); ctx.beginPath(); ctx.arc(p[0], p[1], s + ctx.lineWidth * 0.5 + 1.2, 0, 7); ctx.stroke(); }
+      if (tyre && tyre !== TYRE.UNKNOWN && MAPOPT.tails) { ctx.strokeStyle = tyre; ctx.lineWidth = Math.max(1.5, s * 0.22); ctx.beginPath(); ctx.arc(p[0], p[1], s + ctx.lineWidth * 0.5 + 1.2, 0, 7); ctx.stroke(); }
       if (mine) {
         const ph = (now % 1600) / 1600;
         ctx.globalAlpha = 1 - ph; ctx.strokeStyle = "#fff"; ctx.lineWidth = 1.5;

@@ -1,6 +1,21 @@
 /* F1 Hub dashboard - the moving track map, the sync / loading bar.
    A classic script: it shares the page's global scope with the others, loaded in the order dashboard.html
    lists them (functions in a later file aren't defined yet while an earlier one runs). */
+/* ---------- what the big map shows (the Show buttons over it; kept per browser) ---------- */
+const MAPOPT = Object.assign({names: true, tails: true, battles: true, pits: true, sc: true}, store.get("mapopt", {}));
+function setMapOpt(k, on) {
+  MAPOPT[k] = on === undefined ? !MAPOPT[k] : !!on;
+  store.set("mapopt", MAPOPT);
+  mapOptUi();
+}
+function mapOptUi() {
+  document.querySelectorAll("#mapshow button").forEach(b => { b.classList.toggle("on", !!MAPOPT[b.dataset.o]); b.setAttribute("aria-pressed", String(!!MAPOPT[b.dataset.o])); });
+  const big = document.getElementById("bigmap");
+  if (big) big.classList.toggle("nonames", !MAPOPT.names);
+}
+document.querySelectorAll("#mapshow button").forEach(b => b.onclick = () => setMapOpt(b.dataset.o));
+mapOptUi();
+
 /* ---------- fluid map: animate cars between updates along the real position samples ---------- */
 const TRAIL = {};                 // number -> [[epoch_ms, x, y], ...]
 // Draw the map this far behind "now" so there is always a next sample to move towards. Positions reach us a few
@@ -38,6 +53,9 @@ function carAt(n, T) {
         const f = (T - b[0]) / (b[0] - a[0]);
         return [T, b[1] + (b[1] - a[1]) * Math.min(f, 1), b[2] + (b[2] - a[2]) * Math.min(f, 1)];
       }
+      // a hole in the samples (a fast replay skips ahead between frames): wait where it was, then jump - gliding
+      // straight across would cut through the infield
+      if (b[0] - a[0] > 4000) return T - a[0] < 1000 ? a : b;
       const f = (T - a[0]) / (b[0] - a[0] || 1);
       return [T, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f];
     }

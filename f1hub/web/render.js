@@ -178,8 +178,8 @@ function renderLive(d) {
     const cutRow = d.rows[i + 1], below = cutRow ? qx(cutRow) : {};
     const cutNote = !cuts[i + 1] || !cutRow ? "" : Q ? (below.needs != null ? ` · ${esc(cutRow.code)} is ${below.needs.toFixed(3)}s off safety` : "")
       : cutRow.best_lap && r.best_lap ? ` · P${i + 2} is ${(cutRow.best_lap - r.best_lap).toFixed(3)}s off safety` : "";
-    return `<tr data-n="${r.number}" class="click ${moved ? (gain ? "flash gain" : "flash lose") : ""} ${r.number === focus ? "focus" : ""} ${r.out ? "out" : ""} ${x.out_in ? "qout" : ""}" onclick="setFocus(${r.number})" title="${r.out ? esc("OUT - " + r.out.reason) : x.on_lap ? "On a flying lap" : ""}">
-      <td class="pos">${r.out ? "OUT" : r.pos}${x.on_lap ? '<span class="onlap" title="On a flying lap">●</span>' : ""}</td>
+    return `<tr data-n="${r.number}" class="click ${moved ? (gain ? "flash gain" : "flash lose") : ""} ${r.number === focus ? "focus" : ""} ${r.out ? "out" : ""} ${x.out_in ? "qout" : ""}${CMP.picked.includes(r.number) ? " cmp" : ""}" onclick="towerClick(event, ${r.number})" onmousedown="if (event.shiftKey) event.preventDefault()" title="${r.out ? esc("OUT - " + r.out.reason) : x.on_lap ? "On a flying lap" : ""}">
+      <td class="pos"${CMP.picked.includes(r.number) ? ` data-cmp="${CMP.picked.indexOf(r.number) + 1}"` : ""}>${r.out ? "OUT" : r.pos}${x.on_lap ? '<span class="onlap" title="On a flying lap">●</span>' : ""}</td>
       <td><div class="drv" title="${esc(r.team || "")}"><span class="stripe" style="background:${esc(r.colour)}"></span>${esc(r.code)} <span class="nm">${esc(r.name || "")}</span></div></td>
       <td class="r">${quali ? qgap(r) : r.out ? `<span style="color:#ff5050">OUT L${r.out.lap ?? "?"}</span>` : r.pos === 1 ? "Leader" : fmtGap(r.gap)}</td>
       <td class="r">${quali ? qint(r, i) : r.out || r.pos === 1 ? "" : fmtGap(r.interval)}</td>
@@ -599,6 +599,7 @@ document.addEventListener("keydown", e => {
   else if ((k === "," || k === ".") && rep) jumpEvent(k === "." ? 1 : -1);
   else if (k === "s" || k === "S") toggleDrawer();
   else if (k === "m" || k === "M") openPip();
+  else if (k === "n" || k === "N") setMapOpt("names");
   else if (k === "?") toggleHelp();
   else if (k === "d" || k === "D") toggleStatus();
   else if (k === "Escape") { toggleHelp(false); toggleStatus(false); $("drawer").classList.remove("open"); }
@@ -606,6 +607,7 @@ document.addEventListener("keydown", e => {
   else if ((k === "ArrowLeft" || k === "ArrowRight") && rep) seekRel((k === "ArrowLeft" ? -1 : 1) * (e.shiftKey ? 60 : 10));
   else if ((k === "l" || k === "L") && D && D.mode === "replay") ctl({mode: "live"});
   else if ((k === "+" || k === "=" || k === "-") && D && D.mode === "live") setDelay(curDelay() + (k === "-" ? -5 : 5));
+  else if ((k === "+" || k === "=" || k === "-") && rep) stepSpeed(k === "-" ? -1 : 1);
   else done = false;
   if (done) e.preventDefault();
 });

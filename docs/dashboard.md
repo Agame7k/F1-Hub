@@ -14,6 +14,7 @@ The full guide to the browser dashboard (`python3 -m f1hub gui`). For setup, see
 - [Live OpenF1 recordings](#live-openf1-recordings)
 - [Status and troubleshooting](#status-and-troubleshooting)
 - [Keyboard shortcuts](#keyboard-shortcuts)
+- [Data feed for other programs](feed.md)
 - [Server safety and resilience](#server-safety-and-resilience)
 
 ## Live tabs
@@ -49,14 +50,15 @@ Drawn on the 2D map on the map's own clock (a few seconds behind the timing), so
 - **Purple sectors:** the part of the track lights up purple with the driver's code. The S1/S2/S3 boundaries aren't in the data, so the map learns them from where cars were when each sector ended; it needs about a lap of position history first.
 - **Selected car:** a readout beside it (speed, gear, throttle, brake). The **Track / Speed / Throttle / Brake** switch colours the track with its last completed lap, and with the ghost on, the track between the car and the ghost shows green when it's ahead, red when behind.
 - **Chequered flag:** waves at the line when the session ends.
+- **Safety car** (2D and 3D): OpenF1 doesn't publish the safety car's position, so it's drawn on the track's centre line ahead of the leader: 500 m when it comes out, closing to about 150 m as the field bunches up. It fades in with a pulsing glow ("SC DEPLOYING"), shows "SC IN" once race control says it's in this lap, and peels off into the pit lane when it reaches the line. A red flag takes it off the map. It's an illustration of where it is, not a measurement.
+- **Show** buttons over the map switch each layer on or off: driver names (also `N`; the selected car keeps its label), trails and tyre rings, battles, pit stops and the safety car. The choice is remembered.
 
 Across the page, on any tab (race and sprint):
 
 - **Start lights:** when the field stops on the grid after driving onto it, five red lights come on a second apart, then go out the moment the cars launch. Position data runs a few seconds ahead of what's on screen, so the last light is timed to land just before the launch. It doesn't trigger before the formation lap, or when you open the page onto cars already parked. Standing restarts after a red flag get lights too.
 - **Banners:** safety car, virtual safety car, red flag, green flag after a neutralisation, fastest lap, and final lap.
-- There's no safety car marker on the map: OpenF1 doesn't publish the safety car's position, so it would be a guess.
 
-**Test mode** (Settings → Test mode) shows a panel of buttons that plays each of these on demand using the loaded session: start lights, the banners, an overtake, a battle, a pit stop, purple sectors, the chequered flag, selecting the leader (readout and speed colours), and the race win, World Champion and Constructors' Champion celebrations (marked "Test mode - not a real result"). Map effects open the Track map and need cars on it, so load a live session or a replay first. It only changes what's on your screen; nothing is sent to the server. The choice is remembered (`f1hub/web/demo.js`).
+**Test mode** (Settings → Test mode) shows a panel of buttons that plays each of these on demand using the loaded session: start lights, the banners (the safety car one also sends the safety car round the map for 20 s), an overtake, a battle, a pit stop, purple sectors, the chequered flag, selecting the leader (readout and speed colours), and the race win, World Champion and Constructors' Champion celebrations (marked "Test mode - not a real result"). Map effects open the Track map and need cars on it, so load a live session or a replay first. It only changes what's on your screen; nothing is sent to the server. The choice is remembered (`f1hub/web/demo.js`).
 
 ### Polling budget
 
@@ -75,7 +77,7 @@ The poller is tiered to stay inside **60 requests/minute**:
   - **Delay** (0–600 s) matches your TV or stream; the quick-sync button sets it the moment the leader crosses the line.
   - If you ask for more delay than has been buffered, the picture holds still and a countdown shows when it starts moving, so nothing is spoiled.
   - **Spoiler mode** hides this race's result, standings and calendar winner while you're delayed or replaying.
-  - **Replay** any race on a virtual clock, with a scrubber, flag markers, play/pause and 1–10× speed.
+  - **Replay** any race on a virtual clock, with a scrubber, flag markers, play/pause and ¼× to 64× speed (<kbd>+</kbd> / <kbd>-</kbd> step through them).
 - **Full replays:** any session (practice, qualifying, sprint and race) from any season OpenF1 has (2023 onwards), or 2018–2022 with FastF1. The title maths uses the standings as they were at that round, so a replay never crowns anyone early.
 
 ## Championship, strategy and telemetry extras
@@ -88,7 +90,7 @@ The poller is tiered to stay inside **60 requests/minute**:
   - Undercut watch: whether a fresh set beats the gap to the car ahead.
   - Pit stop league, by driver and by team.
   - Tyre degradation: seconds lost per lap of tyre age on the current stint.
-- **Driver telemetry tab:** head-to-head lap compare, covering speed, the gap along the lap, throttle and brake, and both drivers' braking zones on the map (`/api/lap`, `f1hub/laptrace.py`).
+- **Driver telemetry tab:** lap compare for 2 to 4 drivers (each on their best or last lap), covering speed, the gap along the lap to the first driver, throttle and brake, and everyone's braking zones on the map (`/api/lap`, `f1hub/laptrace.py`). **Shift-click** rows in the timing tower to pick drivers; a bar at the bottom of the page lists them, and *Compare laps* opens them here. A driver whose team colour is already taken gets a spare colour.
 
 ## Alerts and crash detection
 
@@ -209,10 +211,12 @@ Press `?` on the dashboard for the list.
 | `S` | Settings |
 | `D` | Status (setup check) |
 | `M` | Mini tower |
+| `N` | Track map: driver names on / off |
 | `Space` | Play/pause a replay |
 | Left / Right arrow | Seek 10 s (`Shift` for 1 min) |
 | `L` | Back to live |
-| `+` / `-` | Nudge the delay |
+| `+` / `-` | Live: nudge the delay. Replay: step the speed (¼× to 64×) |
+| `Shift`+click | Timing tower: pick drivers for the lap compare |
 | `Esc` | Close things |
 
 Your tab is remembered and is in the URL (`#map`, `#radio`, …), so you can bookmark a view.
@@ -221,7 +225,7 @@ Each tab keeps its own scroll position, and the tab bar stays at the top of the 
 
 ## Server safety and resilience
 
-- The local server only answers its own page: other websites can't change your settings or read the data (cross-site requests and foreign hostnames get a 403).
+- The local server only answers its own page: other websites can't change your settings or read the data (cross-site requests and foreign hostnames get a 403). The one exception is opt-in: `gui --open-feed` lets web pages from anywhere read the [data feed](feed.md), which is read-only.
 - Bad parameters get a clear 400 instead of a crash, and `/api/health` reports what is connected and whether changed settings need a restart.
 - When OpenF1 or the network fails, requests answer with the reason (a 502) instead of a server error, and the log records it once, not on every retry. Live timing keeps trying and logs when it's working again.
 - If the port is already taken (F1 Hub is probably running already), it says so and suggests `--port`.

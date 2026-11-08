@@ -47,6 +47,15 @@ function optimistic(params) {
   if ("delay" in params) return {delay: +params.delay};
   return OPT;
 }
+const SPEEDS = [0.25, 0.5, 1, 2, 4, 8, 16, 32, 64];
+function stepSpeed(dir) {           // the next speed up or down the menu
+  if (!D || !D.replay) return;
+  const cur = replayState().speed;
+  let i = 0;
+  SPEEDS.forEach((s, k) => { if (Math.abs(s - cur) < Math.abs(SPEEDS[i] - cur)) i = k; });
+  const next = SPEEDS[Math.max(0, Math.min(SPEEDS.length - 1, i + dir))];
+  if (next !== cur) ctl({speed: next});
+}
 function togglePlay() { if (D && D.replay) ctl({play: replayState().playing ? 0 : 1}); }
 function toggleDrawer() { $("drawer").classList.toggle("open"); if ($("drawer").classList.contains("open")) loadSessions(); }
 async function ctl(params) {

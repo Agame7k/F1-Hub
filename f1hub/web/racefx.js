@@ -2,7 +2,7 @@
    On the 2D map: a short tail behind each car and a ring in its tyre colour, a line between cars fighting within a
    second, a flash when a car takes a place, pit stops (in the lane, then the time stationary), a sector lighting up
    purple, the selected car's last lap coloured by speed / throttle / brake, a readout beside it, and the gap to the
-   ghost drawn along the track. Across the page: the start lights, safety car / VSC / red flag, fastest lap, final
+   ghost drawn along the track, and the safety car. Across the page: the start lights, safety car / VSC / red flag, fastest lap, final
    lap and the chequered flag.
    Things seen on the map run on the map's clock (a few seconds behind the timing, see MAP_LAG); the rest runs on the
    frame being shown. Either way a delay or a replay never shows a moment early.
@@ -52,6 +52,7 @@ const median = a => { if (!a.length) return null; const s = a.slice().sort((p, q
 function fxReset() {
   FX.prev = null; FX.flashes = []; FX.sectors = []; FX.pit = {}; FX.lapStarts = {}; FX.lights = {phase: "idle"};
   FX.chequer = null; FX.lap = {key: null, trace: null, loading: false};
+  scReset();
 }
 
 /* ---------- per frame of data: places gained, pit counts, purple sectors, sector lines, banners ---------- */
@@ -80,6 +81,7 @@ function raceMoments(d) {
     if (race && moved && moved <= 8 && d.status !== "RED") placesGained(d, prev, cur, vt);
     if (race) banners(d, prev, cur);
   }
+  scStatus(d, prev, vt);
   FX.prev = cur;
   if (d.status === "CHEQUERED" && prev && prev.status !== "CHEQUERED") FX.chequer = fxNow();
 }
@@ -254,6 +256,75 @@ function pitLabel(n, st, T) {
   return {text: `${off ? "" : "~"}${secs.toFixed(1)}s`, cls: "done", tyre};
 }
 
+/* ---------- the safety car ----------
+   There is no position data for the safety car, so it's placed on the track's centre line a set distance ahead of the
+   leader: 500 m when it comes out, closing to ~150 m as the field bunches up behind it. It fades in over 3 s
+   ("SC DEPLOYING"); once race control says it's in this lap it shows "SC IN", and it peels off into the pit lane when
+   it reaches the line (or after 2.5 minutes, whichever comes first). The status changes on the frame's clock; the car
+   is drawn on the map's (a few seconds behind), so it never comes out before the cars on the map have got there. */
+const SC = {since: null, inAt: null, gone: null, arc: null, geo: null};
+const SC_FADE = 3000;
+function scReset() { Object.assign(SC, {since: null, inAt: null, gone: null, arc: null}); }
+function scStatus(d, prev, vt) {
+  if (!isRaceSession(d)) return;
+  const was = prev ? prev.status : null;
+  if (d.status === "SC" && (was !== "SC" || SC.since == null)) {
+    // the first frame after a seek or a page load: it was already out, so no deploying
+    Object.assign(SC, {since: prev ? vt : -Infinity, inAt: null, gone: null, arc: null});
+  } else if (d.status !== "SC" && SC.since != null && SC.inAt == null) {
+    if (d.status === "RED" || !prev) scReset();          // a red flag: the field follows it into the pit lane
+    else SC.inAt = vt;
+  }
+}
+// the outline's running distance, in OpenF1 units (tenths of a metre)
+function scGeo(o) {
+  const key = o.length + ":" + o[0].join() + ":" + o[o.length - 1].join();
+  if (SC.geo && SC.geo.key === key) return SC.geo;
+  const cum = [0];
+  for (let i = 1; i <= o.length; i++) { const a = o[i - 1], b = o[i % o.length]; cum.push(cum[i - 1] + Math.hypot(b[0] - a[0], b[1] - a[1])); }
+  return SC.geo = {key, cum, total: cum[o.length]};
+}
+function scPoint(o, g, s) {         // the point `s` units round the lap from the line
+  s = ((s % g.total) + g.total) % g.total;
+  let lo = 0, hi = o.length;
+  while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (g.cum[mid] <= s) lo = mid; else hi = mid; }
+  const a = o[lo], b = o[(lo + 1) % o.length], f = (s - g.cum[lo]) / (g.cum[lo + 1] - g.cum[lo] || 1);
+  return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f];
+}
+// where the safety car is at map time T: {x, y, phase, label, alpha} in OpenF1 units, or null
+function scAt(T) {
+  if (SC.since == null || T < SC.since || !D || !D.map) return null;
+  const o = D.map.outline || [];
+  const lead = (D.rows || []).find(r => r.pos === 1 && !r.out), p = lead && carAt(lead.number, T);
+  if (o.length < 50 || !p) return null;
+  const g = scGeo(o), [i] = nearIdx(o, p[1], p[2]);
+  const out = T - SC.since, gap = (150 + 350 * Math.exp(-out / 25000)) * 10;
+  const arc = (g.cum[i] + gap) % g.total;
+  const comingIn = SC.inAt != null && T >= SC.inAt;
+  if (comingIn && SC.gone == null) {
+    // in this lap: it peels off when it gets to the line (its distance round the lap wraps from the end to the start)
+    const crossed = SC.arc != null && SC.arc > g.total * 0.75 && arc < g.total * 0.25;
+    if (crossed || T - SC.inAt > 150000) SC.gone = T;
+  }
+  if (SC.gone == null || T < SC.gone) SC.arc = arc;
+  let alpha = 1, phase = "on", label = "SC";
+  if (SC.gone != null && T >= SC.gone) {
+    const f = (T - SC.gone) / SC_FADE;
+    if (f >= 1) { scReset(); return null; }
+    alpha = 1 - f; phase = "in"; label = "SC IN";
+    const [x, y] = scPoint(o, g, SC.arc + f * 300);          // drifts on into the pit entry as it fades
+    return {x, y, phase, label, alpha};
+  }
+  if (out < SC_FADE) { alpha = out / SC_FADE; phase = "deploying"; label = "SC DEPLOYING"; }
+  else if (comingIn) { phase = "in"; label = "SC IN"; }
+  const [x, y] = scPoint(o, g, arc);
+  return {x, y, phase, label, alpha};
+}
+function scDemo() {
+  const T = vnow().getTime() - MAP_LAG;
+  Object.assign(SC, {since: T, inAt: T + 20000, gone: null, arc: null});      // out for 20 s, then in at the line
+}
+
 /* ---------- the 2D map, every animation frame (called from animateMaps) ---------- */
 function mapFx(svg, P, T) {
   let under = svg.querySelector(".fx-under"), over = svg.querySelector(".fx-over"), lapG = svg.querySelector(".fx-lap");
@@ -304,6 +375,7 @@ function mapFx(svg, P, T) {
   (m.cars || []).forEach(c => {
     const p = at[c.number]; if (!p) return;
     const r = rows[c.number] || {}, col = esc(c.colour), big = c.number === focus;
+    if (!MAPOPT.tails) return;
     if (!calm) {
       const pts = [p];
       for (let k = 1; k <= 12; k++) { const q = carAt(c.number, T - k * 110); if (q) pts.push(P(q[1], q[2])); }
@@ -318,7 +390,7 @@ function mapFx(svg, P, T) {
   });
 
   // battles: cars within a second of the car ahead (racing only)
-  if (isRaceSession(D) && !D.quali && !["SC", "VSC", "RED", "CHEQUERED"].includes(D.status) && D.lap > 1) {
+  if (MAPOPT.battles && isRaceSession(D) && !D.quali && !["SC", "VSC", "RED", "CHEQUERED"].includes(D.status) && D.lap > 1) {
     const order = D.rows.filter(r => r.pos && !r.out);
     for (let i = 1; i < order.length; i++) {
       const a = order[i - 1], b = order[i], pa = at[a.number], pb = at[b.number], iv = b.interval;
@@ -330,7 +402,7 @@ function mapFx(svg, P, T) {
     }
   }
   const db = FX.demoBattle;
-  if (db && now < db.until && at[db.a] && at[db.b] && rows[db.a] && rows[db.b]) battle(rows[db.a], rows[db.b], at[db.a], at[db.b], 0.4);
+  if (db && MAPOPT.battles && now < db.until && at[db.a] && at[db.b] && rows[db.a] && rows[db.b]) battle(rows[db.a], rows[db.b], at[db.a], at[db.b], 0.4);
   function battle(a, b, pa, pb, iv) {
     const mx = (pa[0] + pb[0]) / 2, my = (pa[1] + pb[1]) / 2;
     u += `<line class="fx-battle" x1="${f1(pa[0])}" y1="${f1(pa[1])}" x2="${f1(pb[0])}" y2="${f1(pb[1])}"/>`;
@@ -350,7 +422,7 @@ function mapFx(svg, P, T) {
 
   // pit stops
   Object.entries(FX.pit).forEach(([n, st]) => {
-    if (!st.phase || !at[n]) return;
+    if (!st.phase || !at[n] || !MAPOPT.pits) return;
     const p = at[n], lab = pitLabel(+n, st, T), w = Math.max(40, lab.text.length * 7.2 + 14 + (lab.tyre ? 18 : 0));
     v += `<g class="fx-pit ${lab.cls}" transform="translate(${f1(p[0])},${f1(p[1] + 14)})"><rect x="${f1(-w / 2)}" y="0" width="${f1(w)}" height="18" rx="3"/>
       <text x="${lab.tyre ? -8 : 0}" y="13" text-anchor="middle">${esc(lab.text)}</text>
@@ -369,6 +441,16 @@ function mapFx(svg, P, T) {
         <rect class="bar" x="7" y="23" width="56" height="4" rx="2"/><rect class="thr" x="7" y="23" width="${f1(0.56 * (s.throttle || 0))}" height="4" rx="2"/>
         <rect class="${s.brake ? "brk on" : "brk"}" x="68" y="22" width="17" height="6" rx="2"/></g>`;
     }
+  }
+
+  // the safety car
+  const sc = MAPOPT.sc ? scAt(T) : null;
+  if (sc) {
+    const [x, y] = P(sc.x, sc.y), w = sc.label.length * 6.6 + 12;
+    v += `<g class="fx-sc ${sc.phase}" transform="translate(${f1(x)},${f1(y)})" style="opacity:${f1(sc.alpha)}">
+      <circle class="glow" r="15"/><circle class="body" r="8.5"/>
+      <g class="lab"><rect x="${f1(-w / 2)}" y="-31" width="${f1(w)}" height="16" rx="3"/><text y="-19.5" text-anchor="middle">${sc.label}</text></g>
+      <title>Safety car (placed ahead of the leader: there's no position data for it)</title></g>`;
   }
 
   // chequered flag at the line

@@ -70,7 +70,7 @@
 <div id="scrubbar">
   <div class="row2" style="justify-content:space-between">
     <div class="row2"><button class="btn iconbtn" id="playbtn" onclick="togglePlay()" aria-label="Play / pause"><svg class="ico" aria-hidden="true"><use href="#i-play"/></svg></button>
-      <select id="speedsel" onchange="ctl({speed: this.value})"><option value="1">1×</option><option value="2">2×</option><option value="5">5×</option><option value="10">10×</option></select>
+      <select id="speedsel" onchange="ctl({speed: this.value})"><option value="0.25">¼×</option><option value="0.5">½×</option><option value="1">1×</option><option value="2">2×</option><option value="4">4×</option><option value="8">8×</option><option value="16">16×</option><option value="32">32×</option><option value="64">64×</option></select>
       <b id="replayname"></b><span class="chapters" id="chapters"></span></div>
     <div class="row2"><span class="num" id="replayclock"></span><button class="btn" onclick="seekRel(-60)">-1 min</button><button class="btn" onclick="seekRel(-10)">-10 s</button>
       <button class="btn" onclick="seekRel(10)">+10 s</button><button class="btn" onclick="seekRel(60)">+1 min</button>
@@ -140,11 +140,12 @@
     <dt><kbd>[</kbd> <kbd>]</kbd></dt><dd>Previous / next tab</dd>
     <dt><kbd>S</kbd></dt><dd>Settings - delay, spoilers, replays</dd>
     <dt><kbd>M</kbd></dt><dd>Mini timing tower</dd>
+    <dt><kbd>N</kbd></dt><dd>Track map: driver names on / off</dd>
     <dt><kbd>Space</kbd></dt><dd>Replay: play / pause</dd>
     <dt><kbd>←</kbd> <kbd>→</kbd></dt><dd>Replay: back / forward 10 s (<kbd>Shift</kbd> for 1 min)</dd>
     <dt><kbd>,</kbd> <kbd>.</kbd></dt><dd>Replay: previous / next flag or chapter (Q1, Q2, Q3...)</dd>
     <dt><kbd>L</kbd></dt><dd>Back to live</dd>
-    <dt><kbd>+</kbd> <kbd>-</kbd></dt><dd>Delay up / down 5 s (live)</dd>
+    <dt><kbd>+</kbd> <kbd>-</kbd></dt><dd>Live: delay up / down 5 s. Replay: faster / slower (¼× to 64×)</dd>
     <dt><kbd>Esc</kbd></dt><dd>Close whatever is open</dd>
     <dt><kbd>D</kbd></dt><dd>Setup check - what's working, and what to fix</dd>
     <dt><kbd>?</kbd></dt><dd>This list</dd>
@@ -265,8 +266,10 @@
     <div class="card"><h2>Live track position <span class="sub" id="maphint"></span>
       <div class="seg" id="mapview" role="group" aria-label="Map view"><button data-v="2d" class="on">2D</button><button data-v="3d">3D</button></div>
       <label class="switch sub" title="Races the fastest lap against the car you select on the map"><input type="checkbox" id="ghoston" onchange="toggleGhost(this.checked)"> Ghost of the fastest lap</label></h2>
-      <div class="seg sub" id="mapcolour" role="group" aria-label="Colour the track with the selected car's last lap" title="Colour the track with the selected car's last lap">
+      <div class="mapopts"><div class="seg sub" id="mapcolour" role="group" aria-label="Colour the track with the selected car's last lap" title="Colour the track with the selected car's last lap">
         <button data-m="off" class="on">Track</button><button data-m="speed">Speed</button><button data-m="throttle">Throttle</button><button data-m="brake">Brake</button></div>
+        <div class="seg sub" id="mapshow" role="group" aria-label="Show on the map">
+          <button data-o="names" title="Driver names (N)">Names</button><button data-o="tails" title="A short tail behind each car and a ring in its tyre colour">Trails</button><button data-o="battles" title="A line between cars within a second of each other">Battles</button><button data-o="pits" title="Pit-lane and stop-time labels">Pit stops</button><button data-o="sc" title="The safety car, placed ahead of the leader (there's no position data for it)">Safety car</button></div></div>
       <div class="ghostinfo" id="ghostinfo"></div><div class="ghostinfo" id="maplapinfo"></div>
       <div id="bigmap" class="pad mapwrap"></div>
       <div id="map3d" class="hidden"><canvas id="m3dc" aria-label="3D track map: drag to rotate, scroll to zoom, click a car to select it"></canvas>
@@ -279,7 +282,7 @@
         <div class="m3dhint">Drag to rotate · scroll to zoom · click a car</div>
       </div>
       <div class="maplegend"><span><i class="lg-y"></i>Yellow</span><span><i class="lg-yy"></i>Double yellow</span><span><i class="lg-g"></i>Just cleared</span>
-        <span><i class="lg-sc"></i>SC / VSC</span><span><i class="lg-me"></i>Selected car - click any car</span><span><i class="lg-push"></i>On a flying lap</span>
+        <span><i class="lg-sc"></i>SC / VSC</span><span><i class="lg-sccar"></i>Safety car</span><span><i class="lg-me"></i>Selected car - click any car</span><span><i class="lg-push"></i>On a flying lap</span>
         <span><i class="lg-ghost"></i>Ghost</span><span><i class="lg-tyre"></i>Ring: tyre compound</span><span><i class="lg-battle"></i>Within 1 s</span>
         <span><i class="lg-sec"></i>Purple sector</span></div></div>
     <div class="card"><h2>Running order</h2><div class="feed" id="maporder" style="max-height:700px"></div></div>
@@ -342,9 +345,8 @@
       <div class="card"><h2>Stewarding</h2><div class="feed" id="drvrc" style="max-height:200px"></div></div>
     </div>
   </div>
-  <div class="card" style="margin-top:16px"><h2>Head to head - lap compare</h2>
-    <div class="row2 pad"><select id="h2ha"></select><select id="h2hal"><option value="best">best lap</option><option value="last">last lap</option></select>
-      <b class="muted">vs</b><select id="h2hb"></select><select id="h2hbl"><option value="best">best lap</option><option value="last">last lap</option></select>
+  <div class="card" style="margin-top:16px" id="cmpcard"><h2>Lap compare <span class="sub">up to 4 drivers · or shift-click them in the timing tower</span></h2>
+    <div class="row2 pad"><span id="cmpslots" class="cmpslots"></span>
       <button class="btn primary" onclick="loadH2H()">Compare</button><span class="muted" id="h2hnote"></span></div>
     <div id="h2hbody"></div>
   </div>

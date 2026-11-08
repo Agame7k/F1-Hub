@@ -7,7 +7,7 @@ const DEMO = {on: store.get("testmode", false)};
 const DEMO_BUTTONS = [
   ["Broadcast", [
     ["Start lights", () => { FX.demoLights = {t0: fxNow(), out: 5000 + 200 + Math.random() * 2000}; }],
-    ["Safety car", () => showBanner("sc", `<b>SAFETY CAR</b><span>Deployed</span>`)],
+    ["Safety car", () => { showBanner("sc", `<b>SAFETY CAR</b><span>Deployed</span>`); if (demoCar(0)) scDemo(); }],
     ["Virtual SC", () => showBanner("sc", `<b>VIRTUAL SAFETY CAR</b><span>Deployed</span>`)],
     ["Red flag", () => showBanner("red", `<b>RED FLAG</b><span>Session suspended</span>`)],
     ["Green flag", () => showBanner("green", `<b>GREEN FLAG</b><span>Racing resumes</span>`)],

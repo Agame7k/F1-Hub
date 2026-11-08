@@ -438,3 +438,109 @@ class Cleanup(TempDir):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ------------------------------------------------------------------------------------------------ the data feed
+from f1hub import datafeed  # noqa: E402
+
+
+def feed_frame(**over):
+    """A dashboard frame with just what the feed reads."""
+    f = {"mode": "replay", "session_key": 9999, "seek": 1, "meeting": "Test GP", "session": "Race", "status": "GREEN",
+         "lap": 12, "scheduled_laps": 57, "replay": {"playing": True, "speed": 4, "timeline": []},
+         "rows": [{"pos": 1, "number": 1, "code": "VER", "gap": None, "interval": None, "compound": "MEDIUM", "out": None},
+                  {"pos": None, "number": 4, "code": "NOR", "gap": None, "out": {"reason": "retired", "lap": 9}}],
+         "map": {"cars": [{"number": 1, "code": "VER", "pos": 1, "x": 100, "y": -50, "trail": [[1000, 90, -40], [1250, 100, -50]]}]},
+         "messages": [{"time": "14:02:00", "text": "GREEN LIGHT - PIT EXIT OPEN"}, {"time": "14:00:00", "text": "RISK OF RAIN 20%"}],
+         "weather": {"track": 41.2, "air": 27.0, "rain": False}, "rc": {"sector_flags": {"7": "YELLOW"}}}
+    f.update(over)
+    return f
+
+
+class DataFeed(unittest.TestCase):
+    def test_channels(self):
+        self.assertEqual(datafeed.parse_channels(""), set(datafeed.CHANNELS))
+        self.assertEqual(datafeed.parse_channels("leaderboard, positions.ver,positions.44"),
+                         {"leaderboard", "positions.VER", "positions.44"})
+        for bad in ("nope", "leaderboard.VER", "positions.VERS", "positions.1;x", "positions."):
+            with self.assertRaises(datafeed.BadChannels, msg=bad):
+                datafeed.parse_channels(bad)
+
+    def test_only_what_changed(self):
+        sub = datafeed.Subscriber(datafeed.parse_channels("session,leaderboard,positions.VER,race_control"))
+        first = sub.events(feed_frame())
+        names = [c for c, _ in first]
+        self.assertEqual(names[:3], ["session", "leaderboard", "positions.VER"])
+        rc = [json.loads(t)["text"] for c, t in first if c == "race_control"]
+        self.assertEqual(rc, ["RISK OF RAIN 20%", "GREEN LIGHT - PIT EXIT OPEN"])        # oldest first
+        board = json.loads(dict(first)["leaderboard"])
+        self.assertEqual(board[1]["out"], "retired")
+        self.assertNotIn("sectors", board[0])
+        car = json.loads(dict(first)["positions.VER"])
+        self.assertEqual((car["x"], car["y"], car["t"]), (100, -50, 1250))
+        self.assertEqual(sub.events(feed_frame()), [])                 # nothing new: nothing sent
+        later = sub.events(feed_frame(lap=13, messages=[{"time": "14:05:00", "text": "SAFETY CAR DEPLOYED"}]
+                                      + feed_frame()["messages"]))
+        self.assertEqual([c for c, _ in later], ["session", "race_control"])
+        self.assertEqual(json.loads(later[1][1])["text"], "SAFETY CAR DEPLOYED")
+
+    def test_a_seek_starts_race_control_over(self):
+        sub = datafeed.Subscriber({"race_control"})
+        self.assertEqual(len(sub.events(feed_frame())), 2)
+        self.assertEqual(len(sub.events(feed_frame(seek=2))), 2)
+
+    def test_nothing_before_the_first_frame(self):
+        self.assertEqual(datafeed.Subscriber(set(datafeed.CHANNELS)).events({"error": "Connecting to OpenF1..."}), [])
+
+
+class FrameFeed(StubFeed):
+    def __init__(self):
+        super().__init__()
+        self.frame_cv = threading.Condition()
+        self.feed_streams = 0
+        self.frame = feed_frame()
+
+    def current(self):
+        return self.frame
+
+    def wait_frame(self, seen, timeout):
+        time.sleep(0.05)
+        return seen + 1
+
+
+class FeedServer(Server):
+    def setUp(self):
+        super().setUp()
+        self.feed = self.app.feed = FrameFeed()
+        self.server.RequestHandlerClass = gui.make_handler(self.app)
+
+    def first_events(self, path, headers=None, n=2):
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}", headers=headers or {})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            self.assertEqual(r.headers.get("Content-Type"), "text/event-stream")
+            cors = r.headers.get("Access-Control-Allow-Origin")
+            events = []
+            while len(events) < n:
+                line = r.readline().decode().strip()
+                if line.startswith("event: "):
+                    events.append(line[7:])
+            return events, cors
+
+    def test_streams_the_channels_asked_for(self):
+        events, cors = self.first_events("/api/feed?channels=weather,track")
+        self.assertEqual(events, ["weather", "track"])
+        self.assertIsNone(cors)
+
+    def test_bad_channel_is_a_400(self):
+        code, _, body = self.get("/api/feed?channels=nope")
+        self.assertEqual(code, 400)
+        self.assertIn("unknown channel", json.loads(body)["error"])
+
+    def test_other_sites_only_with_open_feed(self):
+        evil = {"Origin": "https://overlay.example", "Sec-Fetch-Site": "cross-site"}
+        self.assertEqual(self.get("/api/feed", evil)[0], 403)
+        self.app.open_feed = True
+        events, cors = self.first_events("/api/feed?channels=session", evil, n=1)
+        self.assertEqual((events, cors), (["session"], "*"))
+        self.assertEqual(self.get("/api/live", evil)[0], 403)            # only the feed opens up
+        self.assertEqual(self.get("/api/feed", {"Host": f"evil.example:{self.port}"})[0], 403)    # DNS rebinding

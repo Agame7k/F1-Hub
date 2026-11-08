@@ -6,7 +6,7 @@ how many browser tabs are open). With the MQTT stream, a timing message rebuilds
 
 Modes
   live    - latest data, optionally shown N seconds late to match your TV/stream (delay)
-  replay  - any session on a virtual clock: seek, play/pause, 1-10x (spoiler free)
+  replay  - any session on a virtual clock: seek, play/pause, 0.25-64x (spoiler free)
 """
 import errno
 import json
@@ -23,18 +23,19 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import api, ff1
+from . import api, datafeed, ff1
 from .championship import max_remaining, title_status
 
 log = logging.getLogger("f1hub.gui")
 PAGE = Path(__file__).with_name("dashboard.html")
 REPLAY_TICK = 1.0        # seconds of wall time between replay refreshes
-MAX_SPEED = 10
+MAX_SPEED = 64
 HISTORY_SECONDS = 15 * 60
 PUSH_DEBOUNCE = 0.08     # after a streamed timing message, wait this long for the rest of its burst (20 cars)
 PUSH_MIN_GAP = 0.25      # ...but never rebuild the frame more than 4 times a second
 HISTORY_STEP = 0.9       # the delay buffer keeps about one frame a second (the newest of each second)
 MAX_EVENT_STREAMS = 4    # browsers allow ~6 connections per site; leave room for the page's other requests
+MAX_FEED_STREAMS = 8     # /api/feed clients (overlays, scripts), counted apart from the dashboard's own
 SESSION_OVER_TICK = 300  # s between refreshes once a session is over (late corrections still show up)
 # streamed topics that change what's on screen right away; location / car_data ride along with the next frame
 URGENT_TOPICS = {"position", "intervals", "laps", "race_control", "pit", "stints", "overtakes", "team_radio", "weather"}
@@ -346,6 +347,7 @@ class Feed:
         self.frame_no = 0                   # bumps whenever self.live changes; /api/events waits on it
         self.frame_cv = threading.Condition()
         self.event_streams = 0
+        self.feed_streams = 0
         self.build_ms = None                # how long the last frame took to build
         self._hist_at = 0.0
         from .transcribe import Transcriber
@@ -925,10 +927,11 @@ class App:
     """Everything the dashboard's API answers, by path (ROUTES). The HTTP handler only checks where a request comes
     from and turns results into responses, so each route can be called directly (tests)."""
 
-    def __init__(self, feed, port=8765, year=None):
+    def __init__(self, feed, port=8765, year=None, open_feed=False):
         self.feed = feed
         self.port = port
         self.allowed = allowed_hosts(port)
+        self.open_feed = open_feed          # --open-feed: web pages from anywhere (an OBS overlay file) may read /api/feed
         self.loader = SeasonLoader(feed, year or datetime.now(timezone.utc).year, on_change=self.season_changed)
         self.season_cache = {"key": None, "data": None, "at": 0}
         self.home_cache = {"data": None, "at": 0}
@@ -1240,10 +1243,14 @@ def make_handler(app):
         def do_GET(self):
             url = urlparse(self.path)
             q = {k: v[0] for k, v in parse_qs(url.query).items()}
+            if url.path == "/api/feed" and app.open_feed and self.headers.get("Host", "") in app.allowed:
+                return self._feed(q)          # read-only, so other sites may read it - but only when you said so
             if not trusted(self.headers, app.allowed):
                 return self._json({"error": "requests from other sites are not allowed"}, 403)
             if url.path == "/api/events":
                 return self._events()
+            if url.path == "/api/feed":
+                return self._feed(q)
             try:
                 out = app.route(url.path, q)
                 if isinstance(out, Reply):
@@ -1305,10 +1312,50 @@ def make_handler(app):
                 with feed.frame_cv:
                     feed.event_streams -= 1
 
+        def _feed(self, q):
+            """The data feed for other programs (datafeed.py, docs/feed.md): the channels asked for, each sent when it
+            changes, from the same frame the dashboard shows - so a delay or a replay applies to it too."""
+            cors = (("Access-Control-Allow-Origin", "*"),) if app.open_feed else ()
+            try:
+                sub = datafeed.Subscriber(datafeed.parse_channels(q.get("channels")))
+            except datafeed.BadChannels as e:
+                return self._send(json.dumps({"error": str(e)}), code=400, extra=cors)
+            with feed.frame_cv:
+                if feed.feed_streams >= MAX_FEED_STREAMS:
+                    return self._send(json.dumps({"error": f"at most {MAX_FEED_STREAMS} feed clients at once"}), code=503, extra=cors)
+                feed.feed_streams += 1
+            try:
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("Connection", "close")
+                for k, v in cors:
+                    self.send_header(k, v)
+                self.end_headers()
+                self.wfile.write(b"retry: 2000\n\n")
+                seen, idle = -1, time.time()
+                while True:
+                    seen = feed.wait_frame(seen, 1.0)
+                    out = sub.events(feed.current())
+                    for channel, text in out:
+                        self.wfile.write(datafeed.encode(channel, text))
+                    if out:
+                        idle = time.time()
+                    elif time.time() - idle > 15:
+                        self.wfile.write(b": keep-alive\n\n")        # a comment line: notices a client that went away
+                        idle = time.time()
+                    self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                pass
+            finally:
+                with feed.frame_cv:
+                    feed.feed_streams -= 1
+
     return Handler
 
 
-def serve(year=None, session_key="latest", interval=10, port=8765, open_browser=True):
+def serve(year=None, session_key="latest", interval=10, port=8765, open_browser=True, open_feed=False):
     """Run the dashboard. Up at once: the season loads in the background (SeasonLoader)."""
     from . import logs
     logs.setup()
@@ -1323,7 +1370,7 @@ def serve(year=None, session_key="latest", interval=10, port=8765, open_browser=
                              f" (or start this one with --port {port + 1}).") from None
         raise
     feed = Feed(None, session_key, interval)
-    app = App(feed, port, year)
+    app = App(feed, port, year, open_feed=open_feed)
     server.RequestHandlerClass = make_handler(app)
     app.loader.start()
     threading.Thread(target=feed.run, daemon=True, name="feed").start()
@@ -1331,6 +1378,7 @@ def serve(year=None, session_key="latest", interval=10, port=8765, open_browser=
     url = f"http://localhost:{port}"
     log.info("F1 Hub dashboard running at %s  (Ctrl+C to stop)", url)
     log.info("Log: %s", logs.log_file())
+    log.info("Data feed for other programs: %s/api/feed%s", url, "  (open to other sites: --open-feed)" if open_feed else "")
     if open_browser:
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()
 

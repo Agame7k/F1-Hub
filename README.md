@@ -50,14 +50,18 @@ python3 -m f1hub live     # the same live timing in the terminal
 | **Insights** | Battles, pit-now rejoin predictor, race pace, lap chart, theoretical best laps, speed traps |
 | **Strategy & pits** | Tyre stints for the whole field, pit stops, undercut watch, tyre degradation |
 | **Gaps** | Gap-to-leader chart with neutralised periods shaded |
-| **Driver telemetry** | Live speed / gear / RPM / throttle / brake, head-to-head lap compare |
+| **Driver telemetry** | Live speed / gear / RPM / throttle / brake, lap compare for up to 4 drivers (shift-click them in the timing tower) |
 | **Team radio** | Playable clips, downloads, local speech-to-text with searchable transcripts and alert words |
 | **Championship / Calendar** | Standings with who's still in contention, points progression, a title simulator |
 | **Explore** | Session analysis, a telemetry lab for any two laps, season stats from 2018, circuit previews, FastF1 recordings |
 
-Plus: crash detection, alerts (with optional sound and desktop notifications), a delay setting to match your TV, a **no-spoiler mode**, full replays on a virtual clock (1–10×), a mini picture-in-picture tower, TV layouts and keyboard shortcuts (`?`).
+Plus: crash detection, alerts (with optional sound and desktop notifications), a delay setting to match your TV, a **no-spoiler mode**, full replays on a virtual clock (¼× to 64×), a mini picture-in-picture tower, TV layouts and keyboard shortcuts (`?`).
 
 **The full reference, covering every tab, the real-time stream, replays, FastF1 and shortcuts, is in [docs/dashboard.md](docs/dashboard.md).**
+
+### Data feed for other programs
+
+While the dashboard runs, `http://localhost:8765/api/feed` streams what it shows (live, delayed or a replay) as Server-Sent Events, by channel: `session`, `leaderboard`, `positions` (or `positions.VER` for one car), `race_control`, `weather` and `track`. Use it for stream overlays, a Stream Deck or a second screen. `examples/feed_client.py` is a 50-line client; [docs/feed.md](docs/feed.md) lists every field.
 
 ## Command line
 
@@ -179,6 +183,7 @@ Restart F1 Hub after changing them. All the settings:
 | `f1hub/report.py`, `display.py` | Race reports and everything the terminal prints |
 | `f1hub/live.py`, `stream.py` | Live poller (`VIEW_NEEDS`, `CADENCE`) and the MQTT client |
 | `f1hub/gui.py`, `dashboard.html`, `web/` | Dashboard server, the page, and its scripts and styles |
+| `f1hub/datafeed.py`, `examples/feed_client.py` | The data feed for other programs (`/api/feed`) and an example client |
 | `f1hub/home.py`, `replay.py`, `quali.py` | Home page, replays on a virtual clock, the qualifying picture (Q1/Q2/Q3, knockouts) |
 | `f1hub/racecontrol.py` | Race control messages: categories, sector flags, timeline |
 | `f1hub/stewards.py`, `fia.py` | Provisional grid, penalty points and reprimands; FIA decisions and regulation text |

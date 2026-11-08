@@ -51,15 +51,71 @@ function setLayout(k) {
 setLayout(store.get("layout", "standard"));
 
 
-/* ---------- head-to-head lap compare (speed / throttle / brake / delta) + braking zones on the map ---------- */
-const H2H = {a: null, b: null};
+/* ---------- lap compare: 2 to 4 drivers (speed / gap along the lap / throttle and brake) + braking zones ----------
+   Pick drivers here, or shift-click rows in the timing tower and press Compare. The first driver is the reference
+   the gaps are measured against. */
+const CMP_MAX = 4;
+const CMP = {slots: [], picked: [], laps: [], key: ""};
+function cmpDefaults(d) {           // the selected car and the next one up, until you pick your own
+  const a = focus || (d.rows[0] && d.rows[0].number), b = (d.rows.find(r => r.number !== a) || {}).number;
+  return [a, b].filter(Boolean).map(n => ({n, lap: "best"}));
+}
 function fillH2HSelects(d) {
-  const opts = sel => d.rows.map(r => `<option value="${r.number}" ${String(r.number) === sel ? "selected" : ""}>${esc(r.code)} · ${esc(r.name || "")}</option>`).join("");
-  ["h2ha", "h2hb"].forEach((id, i) => {
-    const el = $(id); if (document.activeElement === el && el.options.length) return;
-    const cur = el.value || String((i === 0 ? (focus || d.rows[0]) : d.rows[1] || d.rows[0]).number || "");
-    el.innerHTML = opts(cur);
+  if (!CMP.slots.length && d.rows.length > 1) CMP.slots = cmpDefaults(d);
+  const box = $("cmpslots");
+  if (!box || box.contains(document.activeElement)) return;
+  const key = JSON.stringify([CMP.slots, d.rows.map(r => r.number + r.code)]);
+  if (key === CMP.key) return;
+  CMP.key = key;
+  const opts = n => d.rows.map(r => `<option value="${r.number}" ${r.number === n ? "selected" : ""}>${esc(r.code)} · ${esc(r.name || "")}</option>`).join("");
+  box.innerHTML = CMP.slots.map((s, i) => {
+    const r = d.rows.find(x => x.number === s.n) || {};
+    return `<span class="cmpslot" style="--tc:${esc(r.colour || "#888")}">${i ? '<b class="muted">vs</b>' : ""}
+      <select aria-label="Driver ${i + 1}" onchange="cmpSet(${i}, {n: +this.value})">${opts(s.n)}</select>
+      <select aria-label="Which lap for driver ${i + 1}" onchange="cmpSet(${i}, {lap: this.value})"><option value="best" ${s.lap === "best" ? "selected" : ""}>best lap</option><option value="last" ${s.lap === "last" ? "selected" : ""}>last lap</option></select>
+      ${CMP.slots.length > 2 ? `<button class="gear iconbtn" onclick="cmpRemove(${i})" title="Take ${esc(r.code || "this driver")} out of the compare" aria-label="Remove">${ico("x")}</button>` : ""}</span>`;
+  }).join("") + (CMP.slots.length < CMP_MAX ? `<button class="btn" onclick="cmpAdd()">+ Driver</button>` : "");
+}
+function cmpSet(i, change) { Object.assign(CMP.slots[i], change); CMP.key = ""; if (D) fillH2HSelects(D); }
+function cmpRemove(i) { CMP.slots.splice(i, 1); CMP.key = ""; if (D) fillH2HSelects(D); }
+function cmpAdd() {
+  if (!D || CMP.slots.length >= CMP_MAX) return;
+  const next = D.rows.find(r => !CMP.slots.some(s => s.n === r.number));
+  if (next) CMP.slots.push({n: next.number, lap: "best"});
+  CMP.key = ""; fillH2HSelects(D);
+}
+// shift-click in the timing tower: gather drivers, then Compare opens them here
+function towerClick(e, n) {
+  if (!e.shiftKey) { setFocus(n); return; }
+  e.preventDefault();
+  const i = CMP.picked.indexOf(n);
+  if (i >= 0) CMP.picked.splice(i, 1);
+  else { if (CMP.picked.length >= CMP_MAX) CMP.picked.shift(); CMP.picked.push(n); }
+  cmpPickUi();
+}
+function cmpPickUi() {
+  document.querySelectorAll("#tower tr[data-n]").forEach(tr => {        // (render() draws them too: the tower is rebuilt every frame)
+    const k = CMP.picked.indexOf(+tr.dataset.n), td = tr.querySelector("td.pos");
+    tr.classList.toggle("cmp", k >= 0);
+    if (td) { if (k >= 0) td.dataset.cmp = k + 1; else delete td.dataset.cmp; }
   });
+  let el = $("cmpbar");
+  if (!CMP.picked.length) { if (el) el.remove(); return; }
+  if (!el) { el = document.createElement("div"); el.id = "cmpbar"; el.setAttribute("role", "status"); document.body.appendChild(el); }
+  const row = n => (D && D.rows.find(r => r.number === n)) || {code: "#" + n, colour: "#888"};
+  el.innerHTML = `<span class="muted">Compare</span>${CMP.picked.map(n => `<span class="drv"><span class="stripe" style="background:${esc(row(n).colour)}"></span><b>${esc(row(n).code)}</b></span>`).join("")}
+    ${CMP.picked.length < 2 ? `<span class="muted">shift-click another driver</span>` : `<button class="btn primary" onclick="cmpGo()">Compare laps</button>`}
+    <button class="gear iconbtn" onclick="cmpClear()" title="Clear" aria-label="Clear the selection">${ico("x")}</button>`;
+}
+function cmpClear() { CMP.picked = []; cmpPickUi(); }
+function cmpGo() {
+  if (CMP.picked.length < 2) return;
+  CMP.slots = CMP.picked.map(n => ({n, lap: "best"}));
+  CMP.picked = []; cmpPickUi(); CMP.key = "";
+  openTab("drv");
+  if (D) fillH2HSelects(D);
+  $("cmpcard").scrollIntoView({behavior: REDUCED.matches ? "auto" : "smooth", block: "start"});
+  loadH2H();
 }
 async function fetchLap(driver, lap) {
   const r = await fetch(`/api/lap?driver=${driver}&lap=${lap}&before=${encodeURIComponent(vnow().toISOString())}` + (D && D.mode === "replay" ? `&session=${D.session_key}` : ""));
@@ -67,59 +123,74 @@ async function fetchLap(driver, lap) {
   return r.json();
 }
 async function loadH2H() {
+  const slots = CMP.slots.slice();
+  if (slots.length < 2) { $("h2hnote").textContent = "Pick at least two drivers."; return; }
   $("h2hnote").textContent = "Loading laps…"; $("h2hbody").innerHTML = "";
   try {
-    const [a, b] = await Promise.all([fetchLap($("h2ha").value, $("h2hal").value), fetchLap($("h2hb").value, $("h2hbl").value)]);
-    if (a.error || b.error || !a.samples || !b.samples) { $("h2hnote").textContent = a.error || b.error || "No lap data."; return; }
-    H2H.a = a; H2H.b = b; $("h2hnote").textContent = ""; renderH2H();
+    const laps = await Promise.all(slots.map(s => fetchLap(s.n, s.lap)));
+    const bad = laps.find(t => t.error || !t.samples);
+    if (bad) { $("h2hnote").textContent = bad.error || "No lap data."; return; }
+    CMP.laps = laps; $("h2hnote").textContent = ""; renderH2H();
   } catch (e) {
     $("h2hnote").textContent = e.message === "restart" ? "Lap compare switches on after the next F1 Hub server restart." : "Couldn't load: " + e.message;
   }
 }
+const CMP_SPARE = ["#ffffff", "#ffd300", "#2bd46b", "#8fd3ff"];     // for a driver whose team colour is already taken
 function renderH2H() {
-  const {a, b} = H2H; if (!a || !b || !D) return;
+  const laps = CMP.laps; if (laps.length < 2 || !D) return;
   const row = n => D.rows.find(r => r.number === n) || {code: "#" + n, colour: "#fff"};
-  const ra = row(a.driver), rb = row(b.driver);
-  const colB = rb.colour === ra.colour ? "#ffffff" : rb.colour;
+  const used = [], who = laps.map(t => {
+    const r = row(t.driver);
+    const colour = used.includes(r.colour) ? CMP_SPARE.find(c => !used.includes(c)) : r.colour;
+    used.push(colour);
+    return {r, t, colour};
+  });
+  const ref = who[0];
   const pts = (tr, i) => tr.samples.map(s => [s[1] * 100, s[i]]);
-  // time delta along the lap: where is B relative to A at the same distance?
+  // time along the lap: where is each driver relative to the first at the same distance?
   const tAt = (tr, f) => { const s = tr.samples; let j = s.findIndex(x => x[1] >= f);
     if (j < 0) return s[s.length - 1][0]; if (j === 0) return s[0][0];
     const p = s[j - 1], q = s[j]; return p[0] + (q[0] - p[0]) * ((f - p[1]) / (q[1] - p[1] || 1)); };
-  // positions are sampled ~4x a second, so pin the line: 0 at the start, the real lap-time difference at the finish
-  const raw = [...Array(101).keys()].map(k => tAt(b, k / 100) - tAt(a, k / 100));
-  const drift = raw[100] - raw[0] - (b.duration - a.duration);
-  const delta = raw.map((v, k) => [k, +(v - raw[0] - drift * k / 100).toFixed(3)]);
+  // positions are sampled ~4x a second, so pin each line: 0 at the start, the real lap-time difference at the finish
+  const deltaOf = t => {
+    const raw = [...Array(101).keys()].map(k => tAt(t, k / 100) - tAt(ref.t, k / 100));
+    const drift = raw[100] - raw[0] - (t.duration - ref.t.duration);
+    return raw.map((v, k) => [k, +(v - raw[0] - drift * k / 100).toFixed(3)]);
+  };
   const fmt = v => v.toFixed(0) + "%";
-  const head = (r, t, c) => `<span class="drv"><span class="stripe" style="background:${esc(c)}"></span><b>${esc(r.code)}</b></span> lap ${t.lap} · <b class="num">${fmtLap(t.duration)}</b>
-    <span class="muted num">(${t.sectors.map(x => x ? x.toFixed(3) : "-").join(" / ")})</span>`;
-  const d = b.duration - a.duration;
-  $("h2hbody").innerHTML = `<div class="pad">${head(ra, a, ra.colour)} &nbsp; vs &nbsp; ${head(rb, b, colB)} &nbsp;
-      <b style="color:${d > 0 ? ra.colour : colB}">${esc(d > 0 ? ra.code : rb.code)} faster by ${Math.abs(d).toFixed(3)}s</b></div>
+  const fastest = who.reduce((a, b) => b.t.duration < a.t.duration ? b : a);
+  const head = w => `<span class="cmphead"><span class="drv"><span class="stripe" style="background:${esc(w.colour)}"></span><b>${esc(w.r.code)}</b></span> lap ${w.t.lap} · <b class="num">${fmtLap(w.t.duration)}</b>
+    ${w === fastest ? "" : `<span class="num" style="color:#ff6b6b">+${(w.t.duration - fastest.t.duration).toFixed(3)}</span>`}
+    <span class="muted num">(${w.t.sectors.map(x => x ? x.toFixed(3) : "-").join(" / ")})</span></span>`;
+  const others = who.slice(1);
+  $("h2hbody").innerHTML = `<div class="pad cmpheads">${who.map(head).join("")}</div>
     <div class="two"><div>
-      <h2>Speed (km/h)</h2>${lineChart([{colour: ra.colour, points: pts(a, 2)}, {colour: colB, points: pts(b, 2), dash: true}], {H: 220, xFmt: fmt})}
-      <h2>Gap along the lap <span class="sub">above 0 = ${esc(rb.code)} behind</span></h2>
-      ${lineChart([{colour: "#8b91a1", points: [[0, 0], [100, 0]], width: 1}, {colour: colB, points: delta}], {H: 160, xFmt: fmt, yFmt: v => v.toFixed(2) + "s"})}
-      <h2>Throttle % / brake</h2>${lineChart([{colour: ra.colour, points: pts(a, 3)}, {colour: colB, points: pts(b, 3), dash: true},
-        {colour: "#e10600", points: pts(a, 4).map(p => [p[0], p[1] * -20]), width: 2}, {colour: "#ff9090", points: pts(b, 4).map(p => [p[0], p[1] * -40]), width: 2}],
+      <h2>Speed (km/h)</h2>${lineChart(who.map((w, i) => ({colour: w.colour, points: pts(w.t, 2), dash: i > 0 && i % 2 === 1})), {H: 220, xFmt: fmt})}
+      <h2>Gap along the lap <span class="sub">to ${esc(ref.r.code)} · above 0 = behind</span></h2>
+      ${lineChart([{colour: "#8b91a1", points: [[0, 0], [100, 0]], width: 1}, ...others.map(w => ({colour: w.colour, points: deltaOf(w.t)}))], {H: 160, xFmt: fmt, yFmt: v => v.toFixed(2) + "s"})}
+      <h2>Throttle % / brake</h2>${lineChart([...who.map((w, i) => ({colour: w.colour, points: pts(w.t, 3), dash: i > 0 && i % 2 === 1})),
+        ...who.map((w, i) => ({colour: w.colour, points: pts(w.t, 4).map(p => [p[0], p[1] * -(10 + i * 10)]), width: 2}))],
         {H: 160, xFmt: fmt, yMin: -45, yMax: 100})}
-      <div class="muted" style="font-size:12px">Red bars under the throttle: braking (dark ${esc(ra.code)}, light ${esc(rb.code)}).</div>
-    </div><div><h2>Braking zones - ${esc(ra.code)} (red) vs ${esc(rb.code)} (white)</h2>${brakeMap(a, b, ra.colour, colB)}</div></div>`;
+      <div class="muted" style="font-size:12px">Bars under the throttle: braking, one row per driver in their colour.</div>
+    </div><div><h2>Braking zones</h2>${brakeMap(who)}
+      <div class="maplegend">${who.map(w => `<span><i style="background:${esc(w.colour)}"></i>${esc(w.r.code)}</span>`).join("")}</div></div></div>`;
 }
-function brakeMap(a, b, ca, cb) {
+function brakeMap(who) {
   const m = D.map || {}; const outline = m.outline || [];
-  const base = outline.length ? outline : a.samples.map(s => [s[6], s[7]]);
+  const base = outline.length ? outline : who[0].t.samples.map(s => [s[6], s[7]]);
   const th = (m.rotation || 0) * Math.PI / 180, cs = Math.cos(th), sn = Math.sin(th), W = 520;
   const rot = (x, y) => [x * cs - y * sn, x * sn + y * cs], R = base.map(p => rot(p[0], p[1]));
   const minX = Math.min(...R.map(p => p[0])), maxX = Math.max(...R.map(p => p[0])), minY = Math.min(...R.map(p => p[1])), maxY = Math.max(...R.map(p => p[1]));
   const pad = 16, k = (W - 2 * pad) / (maxX - minX || 1), H = Math.round((maxY - minY) * k + 2 * pad);
   const P = (x, y) => { const [u, v] = rot(x, y); return [(pad + (u - minX) * k).toFixed(1), (H - (pad + (v - minY) * k)).toFixed(1)]; };
   const path = arr => arr.map((p, i) => (i ? "L" : "M") + P(p[0], p[1]).join(",")).join("");
-  const zones = (tr, col, w, off) => { let out = "", seg = [];
-    tr.samples.forEach(s => { if (s[4]) seg.push([s[6] + off, s[7] + off]); else if (seg.length) { out += `<path d="${path(seg)}" stroke="${col}" stroke-width="${w}" fill="none" stroke-linecap="round"/>`; seg = []; } });
-    if (seg.length) out += `<path d="${path(seg)}" stroke="${col}" stroke-width="${w}" fill="none" stroke-linecap="round"/>`; return out; };
-  return `<svg viewBox="0 0 ${W} ${H}" width="100%"><path d="${path(base)}Z" fill="none" stroke="#2c303b" stroke-width="10" stroke-linejoin="round"/>
-    ${zones(a, "#e10600", 7, 0)}${zones(b, "#ffffff", 3, 0)}</svg>`;
+  const zones = (tr, col, w) => { let out = "", seg = [];
+    const flush = () => { if (seg.length) out += `<path d="${path(seg)}" stroke="${col}" stroke-width="${w}" fill="none" stroke-linecap="round"/>`; seg = []; };
+    tr.samples.forEach(s => { if (s[4]) seg.push([s[6], s[7]]); else flush(); }); flush(); return out; };
+  // widest first, so every driver's zones stay visible on top of the one before
+  const widths = [9, 6.5, 4, 2];
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%"><path d="${path(base)}Z" fill="none" stroke="#2c303b" stroke-width="12" stroke-linejoin="round"/>
+    ${who.map((w, i) => zones(w.t, w.colour, widths[i])).join("")}</svg>`;
 }
 
 

@@ -395,6 +395,16 @@
                  background: var(--panel2); font-size: 11px; font-weight: 800; }
   .formchips i.w { background: var(--gold); color: #000; } .formchips i.p { background: #6b5a1a; } .formchips i.pts { background: #1d5b2a; }
   .formchips i.out { background: #4a1414; color: #ff8a8a; }
+  .cmpslots { display: contents; }
+  .cmpslot { display: inline-flex; align-items: center; gap: 6px; padding-left: 8px; border-left: 3px solid var(--tc); }
+  .cmpslot b.muted { margin-right: 4px; }
+  .cmpheads { display: flex; flex-wrap: wrap; gap: 6px 22px; }
+  #tower tr.cmp td.pos { box-shadow: inset 3px 0 0 var(--amber); }
+  #tower tr.cmp td.pos::after { content: attr(data-cmp); display: inline-block; margin-left: 5px; min-width: 15px; padding: 0 3px; border-radius: 3px;
+                                background: var(--amber); color: #000; font-size: 10px; font-weight: 900; text-align: center; line-height: 15px; }
+  #cmpbar { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 78; display: flex; align-items: center; gap: 10px;
+            padding: 8px 10px 8px 14px; border-radius: 8px; background: #0b0c10f2; border: 1px solid var(--amber); box-shadow: 0 10px 40px #000a;
+            max-width: calc(100vw - 32px); flex-wrap: wrap; font-size: 13px; }
   .h2hbar { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--panel2); min-width: 90px; }
   .h2hbar i { display: block; height: 100%; }
   .facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
@@ -905,7 +915,17 @@
   @media (max-width: 700px) { .m3dhint { display: none; } #m3dc { height: 60vh; } }
 
   /* ---------- race moments on the map (racefx.js) ---------- */
-  #mapcolour { margin: 8px 14px 0; }
+  .mapopts { display: flex; flex-wrap: wrap; gap: 8px 12px; margin: 8px 14px 0; }
+  #bigmap.nonames .t-lab:not(.me) { display: none; }
+  .trk .fx-sc { pointer-events: none; }
+  .trk .fx-sc .glow { fill: #ffb00044; }
+  .trk .fx-sc.deploying .glow { transform-box: fill-box; transform-origin: center; animation: fxscpulse .9s ease-in-out infinite; }
+  @keyframes fxscpulse { 50% { transform: scale(1.5); fill: #ffb00077; } }
+  .trk .fx-sc .body { fill: #ffb000; stroke: #fff; stroke-width: 2; }
+  .trk .fx-sc .lab rect { fill: #0b0c10f0; stroke: #ffb000; }
+  .trk .fx-sc .lab text { fill: #ffb000; font-weight: 900; font-size: 11px; letter-spacing: .6px; }
+  .trk .fx-sc.in .lab rect { fill: #ffb000; } .trk .fx-sc.in .lab text { fill: #000; }
+  .maplegend .lg-sccar { width: 11px; height: 11px; border-radius: 50%; background: #ffb000; box-shadow: 0 0 0 2px #fff; }
   .trk .fx-tail { fill: none; stroke-width: 5; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
   .trk .fx-tyre { fill: none; stroke-width: 2; pointer-events: none; }
   .trk .fx-lap line { stroke-width: 7; stroke-linecap: round; pointer-events: none; }
