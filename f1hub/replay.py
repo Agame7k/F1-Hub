@@ -118,8 +118,14 @@ class ReplayTracker(LiveTracker):
         self._t += timedelta(seconds=seconds)
 
     # ----------------------------------------------------------------- data
+    def _scheduled_laps(self):
+        if hasattr(self.store, "query"):        # a FastF1 session knows its own race distance
+            return self.store.scheduled_laps
+        return super()._scheduled_laps()
+
     def _fetch(self, endpoint, **params):
         T = self._t.timestamp()
+        query = getattr(self.store, "query", None)       # a FastF1 store answers everything itself
         if endpoint in WINDOWED:
             cap = self._t.astimezone(timezone.utc).isoformat()
             if not params.get("date<") or _ts(params["date<"]) > T:
@@ -127,8 +133,12 @@ class ReplayTracker(LiveTracker):
             lo = params.get("date>") or params.get("date>=")
             if lo and _ts(lo) >= T:
                 return []
+            if query:
+                return query(endpoint, **params)
             return api.get(endpoint, ttl=api.FOREVER, **params)   # past windows never change
         if endpoint not in PRELOAD:
+            if query:
+                return query(endpoint, **params)
             return api.get(endpoint, ttl=3600, **params)
         rows = self.store.get(endpoint, T)
         out = self._at_time(endpoint, rows, T)

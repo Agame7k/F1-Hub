@@ -21,7 +21,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import api
+from . import api, ff1
 from .championship import max_remaining, title_status
 
 PAGE = Path(__file__).with_name("dashboard.html")
@@ -279,10 +279,32 @@ def clean_lap_query(q, default_session):
     return int(key), int(num), lap, before
 
 
-def clean_year(v):
+def clean_year(v, first=2023):
+    """A season OpenF1 has (2023 on) - or from 2018 where FastF1 can fill in (first=ff1.FIRST_YEAR)."""
     if v in (None, ""):
         return None
-    return int(_number(v, 2023, datetime.now(timezone.utc).year, "year"))
+    return int(_number(v, first, datetime.now(timezone.utc).year, "year"))
+
+
+def clean_key(v):
+    if not str(v or "").isdigit():
+        raise BadRequest("session must be a session key")
+    return int(v)
+
+
+def clean_before(v):
+    if not v:
+        return None
+    v = _when(v)
+    if not v[0].isdigit() or "T" not in v:
+        raise BadRequest("before must be an ISO time")
+    return v
+
+
+def _ff1_year(year):
+    if year and year < 2023 and not ff1.available():
+        raise BadRequest(f"{year} needs FastF1 (OpenF1 starts in 2023): .venv/bin/pip install fastf1")
+    return year
 
 
 class Feed:
@@ -346,7 +368,8 @@ class Feed:
     def control(self, **kw):
         with self.lock:
             if kw.get("mode") == "replay" or ("at" in kw and self.replay):
-                self.loading = {"text": "Loading replay - fetching the session from OpenF1", "since": time.time()}
+                via = "FastF1 (the first time can take a minute or two)" if ff1.is_key(kw.get("session")) else "OpenF1"
+                self.loading = {"text": f"Loading replay - fetching the session from {via}", "since": time.time()}
             self.requested += 1
             ticket = self.requested
             self.pending.append((ticket, dict(kw, _wall=time.time())))   # when you clicked, not when it's applied
@@ -389,10 +412,7 @@ class Feed:
             key = kw.get("session") or (self.replay["store"].key if self.replay else None) or "latest"
             same = bool(self.replay) and str(self.replay["store"].key) == str(key)
             if not same:
-                sess = api.get("sessions", ttl=60, session_key=key)
-                if not sess:
-                    raise api.APIError(f"No session {key}")
-                self.replay = {"store": SessionStore(sess[0]), "tracker": None, "playing": False,
+                self.replay = {"store": self._open_store(key, SessionStore), "tracker": None, "playing": False,
                                "speed": 1, "last": time.time()}
             store = self.replay["store"]
             start = datetime.fromisoformat(store.session["date_start"])
@@ -422,6 +442,25 @@ class Feed:
                 self.replay["playing"] = kw["play"] in ("1", "true", True)
             if "speed" in kw:
                 self.replay["speed"] = max(0.25, min(MAX_SPEED, float(kw["speed"])))
+
+    @staticmethod
+    def _open_store(key, SessionStore):
+        """A session to replay: OpenF1's, or FastF1's for older seasons and recordings - and FastF1's copy of an
+        OpenF1 session while OpenF1 is locked (a live session elsewhere)."""
+        if ff1.is_key(key):
+            return ff1.store(key)
+        sess = api.get("sessions", ttl=60, session_key=key)
+        if not sess:
+            raise api.APIError(f"No session {key}")
+        store = SessionStore(sess[0])
+        try:
+            store.get("race_control", time.time())
+        except api.LiveSessionLock:
+            if not ff1.available():
+                raise
+            print(f"OpenF1 is locked - replaying session {key} through FastF1")
+            return ff1.store(ff1.key_for_openf1(sess[0]))
+        return store
 
     # ----------------------------------------------------------------- feed thread
     def run(self):
@@ -638,6 +677,15 @@ class Feed:
     def sessions(self, year=None):
         """Sessions you can replay. With a year: every session OpenF1 has that season (practice, quali, sprint, race)."""
         now = datetime.now(timezone.utc)
+        if year and int(year) < 2023:     # before OpenF1: F1's archive through FastF1
+            out = []
+            for x in ff1.schedule(int(year))["sessions"]:
+                if datetime.fromisoformat(x["date_start"]) < now:
+                    out.append({"key": x["session_key"], "type": x["session_type"], "name": x["session_name"],
+                                "meeting": f"R{x['round']} {x['meeting_name']}", "meeting_key": x["meeting_key"],
+                                "start": x["date_start"], "source": "fastf1",
+                                "label": f"{x['location']} - {x['session_name']}"})
+            return out
         if year:
             year = int(year)
             rows = api.get("sessions", ttl=api.FOREVER if year < now.year else 3600, year=year)
@@ -728,6 +776,41 @@ def serve(season, session_key="latest", interval=10, port=8765, open_browser=Tru
                 traceback.print_exc()
     threading.Thread(target=refresh_season, daemon=True, name="season-refresh").start()
 
+    explore_cache = {}
+    seasons = {}
+
+    def stats(year):
+        """Season stats (Explore tab): OpenF1 seasons from their results, 2018-2022 from the Ergast archive via FastF1.
+        This season respects spoiler mode: nothing from the meeting you're replaying or watching delayed."""
+        from .analysis import _norm_ergast, _norm_openf1, season_stats
+        hide = feed.hidden_meeting()
+        key = ("stats", year, hide)
+        hit = explore_cache.get(key)
+        if hit and time.time() - hit[0] < (1800 if year == feed.season.year else 86400):
+            return hit[1]
+        if year < 2023:
+            data = ff1._disk_cache(f"season-{year}.json", None, lambda: ff1.QUICK.call("season_results", timeout=600, year=year))
+            out = season_stats(_norm_ergast(data), year)
+        else:
+            if year == feed.season.year:
+                season = feed.season
+            else:
+                if year not in seasons:
+                    from .season import Season
+                    seasons[year] = Season(year).load()
+                season = seasons[year]
+            upto = None
+            if hide:
+                r = next((r.number for r in season.rounds if r.meeting_key == hide), None)
+                upto = r - 1 if r else None
+            official = None
+            if season.official and upto is None:      # official totals: fastest-lap points, penalties
+                official = {season.driver(n).code: p for n, p in season.official["drivers"].items()}
+            out = season_stats(_norm_openf1(season, upto), year, official)
+            out["spoiler_hidden"] = bool(upto is not None)
+        explore_cache[key] = (time.time(), out)
+        return out
+
     allowed_hosts = {f"{h}:{port}" for h in ("localhost", "127.0.0.1", "[::1]")} | {"localhost", "127.0.0.1"}
 
     class Handler(BaseHTTPRequestHandler):
@@ -799,14 +882,65 @@ def serve(season, session_key="latest", interval=10, port=8765, open_browser=Tru
                         raise BadRequest("bad tab")
                     feed.control(view=tab, cid=cid)
                     self._json({"ok": True})
-                elif path == "/api/lap":
-                    from .laptrace import lap_trace
+                elif path in ("/api/lap", "/api/lab/trace"):
+                    from .analysis import lab_trace
                     key, num, lap, before = clean_lap_query(q, feed.current().get("session_key"))
-                    self._json(lap_trace(key, num, lap, before) or {"error": "no completed lap yet"})
+                    src = q.get("src", "auto")
+                    if src not in ("auto", "openf1", "fastf1"):
+                        raise BadRequest("src must be auto, openf1 or fastf1")
+                    try:
+                        tr = lab_trace(key, num, lap, src, before)
+                    except ff1.FF1Error as e:
+                        tr = {"error": f"FastF1: {e}"}
+                    self._json(tr or {"error": "no completed lap yet"})
+                elif path == "/api/lab/laps":
+                    from .analysis import lab_laps
+                    self._json(lab_laps(clean_key(q.get("session"))))
+                elif path == "/api/analysis":
+                    from .analysis import session_analysis
+                    self._json(session_analysis(clean_key(q.get("session")), clean_before(q.get("before"))))
+                elif path == "/api/circuit":
+                    from .analysis import circuit_preview
+                    mk = q.get("meeting")
+                    if mk and not mk.isdigit():
+                        raise BadRequest("meeting must be a meeting key")
+                    key = ("circuit", mk)
+                    hit = explore_cache.get(key)
+                    if not hit or time.time() - hit[0] > 1800:
+                        hit = explore_cache[key] = (time.time(), circuit_preview(int(mk) if mk else None, clean_year(q.get("year"))))
+                    self._json(hit[1] or {"error": "no upcoming meeting found"})
+                elif path == "/api/circuit/history":
+                    from .analysis import circuit_history
+                    if not ff1.available():
+                        self._json({"history": [], "error": "FastF1 isn't installed"})
+                    else:
+                        year = clean_year(q.get("year")) or datetime.now().year
+                        self._json({"history": circuit_history(q.get("name", "")[:80], q.get("location", "")[:80], year)})
+                elif path == "/api/stats":
+                    self._json(stats(_ff1_year(clean_year(q.get("year"), ff1.FIRST_YEAR)) or feed.season.year))
+                elif path == "/api/ff1/status":
+                    self._json(ff1.status())
+                elif path == "/api/ff1/recordings":
+                    self._json({"recordings": ff1.recordings(), "recorder": ff1.RECORDER.status()})
+                elif path == "/api/ff1/record":
+                    action = q.get("action")
+                    if action == "start":
+                        tr = feed.live_tracker
+                        sess = tr.session if tr else None
+                        if sess is None:
+                            try:
+                                sess = (api.get("sessions", ttl=60, session_key="latest") or [None])[0]
+                            except api.APIError:
+                                sess = None
+                        self._json(ff1.RECORDER.start(sess))
+                    elif action == "stop":
+                        self._json(ff1.RECORDER.stop())
+                    else:
+                        raise BadRequest("action must be start or stop")
                 elif path in ("/api/radio_file", "/api/radio_zip"):
                     self._radio(path, q)
                 elif path == "/api/sessions":
-                    self._json(feed.sessions(clean_year(q.get("year"))))
+                    self._json(feed.sessions(_ff1_year(clean_year(q.get("year"), ff1.FIRST_YEAR))))
                 elif path == "/api/home":
                     if time.time() - home_cache["at"] > 60 or not home_cache["data"]:
                         from .home import home
@@ -826,11 +960,14 @@ def serve(season, session_key="latest", interval=10, port=8765, open_browser=Tru
                 elif path == "/api/health":
                     st = feed.current()
                     self._json({"ok": "rows" in st, "error": st.get("error"), "mode": st.get("mode"),
-                                "stream": (st.get("feed") or {}).get("stream"), "stt": st.get("stt")})
+                                "stream": (st.get("feed") or {}).get("stream"), "stt": st.get("stt"),
+                                "fastf1": ff1.status()})
                 else:
                     self._json({"error": "not found"}, 404)
             except BadRequest as e:
                 self._json({"error": str(e)}, 400)
+            except api.LiveSessionLock as e:
+                self._json({"error": str(e), "locked": True}, 503)
             except (BrokenPipeError, ConnectionResetError):
                 pass
             except Exception as e:

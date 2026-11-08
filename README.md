@@ -2,7 +2,7 @@
 
 Real Formula 1 data in your terminal, from the [OpenF1 API](https://openf1.org/docs/). Nothing here is simulated: every result, lap time, tyre stint, pit stop, overtake, flag and telemetry sample comes from OpenF1 (2023 season onwards). The only thing the app works out for itself is the championship maths: points, tie-breaks, and when a title is mathematically won.
 
-No dependencies, just Python 3.9+.
+No dependencies, just Python 3.9+. (Optional extras run in a `.venv`: FastF1 for 2018-2022 and recordings, and Whisper for team-radio transcripts.)
 
 ## Live race (needs your OpenF1 login)
 
@@ -43,7 +43,7 @@ The poller is tiered to stay inside **60 requests/minute**:
   - If you ask for more delay than has been buffered, the picture holds still and a countdown shows when it starts moving, so nothing is spoiled.
   - **Spoiler mode** hides this race's result, standings and calendar winner while you're delayed or replaying.
   - **Replay** any race on a virtual clock, with a scrubber, flag markers, play/pause and 1–10× speed.
-  - FastF1 (`pip install fastf1`) could be added later for deeper post-session telemetry. During a live race it reads the same F1 live-timing feed, so it isn't faster than the stream.
+  - FastF1 (optional, see [FastF1](#fastf1-optional) below) adds older seasons, smoother lap telemetry and recording. It can't process the feed in real time, so live timing stays on OpenF1.
 
 ### More on the dashboard
 
@@ -109,9 +109,62 @@ When nothing is on, the dashboard opens on **🏠 Home** (press `H` any time):
 The server follows the "latest" session by itself: when FP1 starts it switches over without a restart.
 Once a session has been over for 30 minutes it stops polling it every second, which leaves the API for the home page.
 
+### Between sessions: the Explore tab
+
+**🔬 Explore** (press `E`) is for digging into anything that has already happened:
+
+| View | What it shows |
+|---|---|
+| **📊 Session analysis** | Any finished session: race pace as box plots (clean laps only: no lap 1, pit laps, SC/VSC/red-flag laps or slow outliers), lap times for the drivers you pick, a lap chart, tyre stints, best laps with the ideal lap (best three sectors) and speed trap, team-mate gaps on one lap and on race pace, and tyre degradation per stint, raw and fuel-corrected (adds back an estimated 0.06 s/lap of fuel burn) |
+| **🧪 Telemetry lab** | Any two laps of any session (not just the one on screen): speed, the gap along the lap, throttle, brake, gear and (FastF1) RPM against distance, plus a map of who's quicker in each of 25 mini-sectors |
+| **📈 Season stats** | Any season from 2018: points, wins, podiums, poles, average qualifying and finishing positions, places gained from the grid, Q3 appearances, points per round, last-5 form, points progression for drivers and constructors, and team-mate head-to-heads in qualifying and races. Click a driver for their season card |
+| **🗺 Circuit preview** | The next round (or any round this season): the track with corner numbers, pit-stop loss (green / SC / VSC), and every past race there with podium, where the winner started, pole, fastest lap, the winner's tyres, safety cars, overtakes and track temperature. Also how many stops cars made and the most-used tyre orders. With FastF1, winners back to 2018 too, each one a click from a replay |
+| **⏺ FastF1 & recordings** | FastF1's status, the live-timing recorder and your recordings |
+
+The Home page shows a compact preview of the next circuit and shortcuts into Explore.
+In spoiler mode, a session from the last few days (and this season's stats, while the latest race is still hidden) stays
+covered until you reveal it. That's the same switch as on Home, so revealing in one place reveals in both. While you're
+replaying a session, its analysis and lab only use what had happened by the replay clock.
+
+### FastF1 (optional)
+
+[FastF1](https://docs.fastf1.dev/) reads F1's own live-timing archive. It needs pandas, so it runs in the project's
+`.venv` in a separate worker process, the same way as the radio speech-to-text, and everything still works without it:
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install fastf1
+```
+
+What it adds:
+- **2018-2022** (OpenF1 starts in 2023) in replays, session analysis, the telemetry lab and season stats (results from the
+  Jolpica-Ergast archive). Replays of these seasons run on the same tracker as OpenF1 replays, without team radio or overtakes.
+- **Smoother lap telemetry** in the lab: car and position data merged on one timeline, distance in metres, RPM and DRS.
+  Choose *FastF1* as the telemetry source (it's automatic for 2018-2022).
+- **A stand-in while OpenF1 is locked.** During a live session OpenF1 blocks free access to everything; replays and
+  analysis of past sessions then switch to FastF1 by themselves.
+- **Recording the live-timing feed** (Explore → FastF1 → *Start recording now*). This saves everything F1's feed sends
+  (timing, positions, car telemetry, race control, weather) to `recordings/fastf1/`. FastF1 can't process it in real time,
+  so it's for playing back afterwards, or part-way through to see what has been recorded so far. Each recording appears in
+  the list with ▶ *Play back* (a full replay) and 📊 (analysis). It stops by itself 30 minutes after the feed goes quiet.
+
+**F1 TV Pro login.** Put your F1 account in `.openf1.env` (see `.openf1.env.example`):
+
+```
+F1_USERNAME=you@example.com
+F1_PASSWORD=...
+```
+
+or set `FASTF1_AUTH_METHOD=browser` to sign in through your browser. Restart F1 Hub after either one. With the login:
+- recordings get the full feed, including car telemetry and positions, which F1's free feed leaves out in recent seasons
+- FastF1 can read F1's archive for **2023 onwards**. Without a login it only serves 2022 and earlier, so the
+  OpenF1-locked fallback and the FastF1 telemetry source for recent sessions need it.
+
+FastF1's downloads are cached in `.f1cache/fastf1/`. A race with telemetry is about 100 MB the first time (a minute or two),
+then loads in seconds. Session keys for FastF1 sessions look like `202122050` (year, round, session number, recording number).
+
 ### Keyboard shortcuts and safety
 
-Press `?` on the dashboard for the list: `H` home, `1`–`0` switch tabs, `[`/`]` step through them, `S` settings,
+Press `?` on the dashboard for the list: `H` home, `E` explore, `1`–`0` switch tabs, `[`/`]` step through them, `S` settings,
 `M` mini tower, `Space` play/pause a replay, `←`/`→` seek 10 s (`Shift` for 1 min), `L` back to live,
 `+`/`-` nudge the delay, `Esc` closes things. Your tab is remembered and is in the URL (`#map`, `#radio`, …),
 so you can bookmark a view.
