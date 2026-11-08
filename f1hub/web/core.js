@@ -10,9 +10,9 @@ const fmtGap = v => v == null ? "" : (typeof v === "number" ? "+" + v.toFixed(3)
 const TYRE = {SOFT: "#e10600", MEDIUM: "#ffd300", HARD: "#f0f0f0", INTERMEDIATE: "#39b54a", WET: "#0067ff", UNKNOWN: "#666"};
 const KIND_LABEL = {red: "red flag", sc: "safety car", vsc: "vsc", sc_end: "sc ending", sector: "sector", blue: "blue flag",
   green: "green", track_clear: "clear", chequered: "chequered", black: "black flag", black_white: "black/white", black_orange: "black/orange",
-  penalty: "penalty", investigation: "investigation", decision: "decision", track_limits: "track limits", lap_deleted: "lap deleted",
+  penalty: "penalty", penalty_served: "penalty served", investigation: "investigation", decision: "decision", track_limits: "track limits", lap_deleted: "lap deleted",
   reprimand: "reprimand", session: "session", overtake_mode: "overtake mode", info: "info", pit: "pit", weather: "weather",
-  start: "restart", incident: "incident"};
+  start: "start", incident: "incident"};
 let D = null, S = null, lastPos = {}, rcFilter = "all", seenRc = 0, activeTab = "live", focus = null;
 
 // each browser tab reports what it's showing; the server prioritises the union of all visible tabs

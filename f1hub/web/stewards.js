@@ -2,7 +2,7 @@
    A classic script: it shares the page's global scope with the others, loaded in the order dashboard.html
    lists them (functions in a later file aren't defined yet while an earlier one runs). */
 /* ---------- helpers ---------- */
-const RULE_KINDS = new Set(["penalty", "investigation", "decision", "reprimand", "black", "black_white", "black_orange", "lap_deleted"]);
+const RULE_KINDS = new Set(["penalty", "penalty_served", "investigation", "decision", "reprimand", "black", "black_white", "black_orange", "lap_deleted"]);
 function msgRow(m) {
   const rule = RULE_KINDS.has(m.kind) && (m.cars || []).length && !/TRACK LIMITS/i.test(m.text || "") || ["penalty", "reprimand"].includes(m.kind);
   return `<div class="msg k-${esc(m.kind)}"><span class="when num">${m.lap ? "L" + m.lap : ""} ${esc(m.time)}</span>

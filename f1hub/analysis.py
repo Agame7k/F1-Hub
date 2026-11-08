@@ -72,6 +72,7 @@ def _overlaps(a, b, spans):
 
 
 # ------------------------------------------------------------------------------------------------ session analysis
+WET_COMPOUNDS = ("INTERMEDIATE", "WET")
 FUEL_EFFECT = 0.06      # s/lap a race car gains as fuel burns off (a typical estimate): added back to show tyre wear alone
 
 
@@ -104,10 +105,20 @@ def session_analysis(key, before=None):
     by = {}
     for l in laps:
         by.setdefault(l["driver_number"], {})[l["lap_number"]] = l
-    clean = {}
+
+    # tyre age per lap from the stints
+    comp_at = {}
+    for st in stints:
+        n = st["driver_number"]
+        for ln in range(st.get("lap_start") or 1, (st.get("lap_end") or st.get("lap_start") or 1) + 1):
+            comp_at[(n, ln)] = (st.get("compound") or "UNKNOWN",
+                                (st.get("tyre_age_at_start") or 0) + ln - (st.get("lap_start") or 1), st.get("stint_number"))
+    family = lambda n, ln: "wet" if (comp_at.get((n, ln)) or ("",))[0] in WET_COMPOUNDS else "dry"
+
+    clean = {}          # number -> [(lap, time, "dry" / "wet")]
     series = {}
     for n, mine in by.items():
-        pts = []
+        pts = {}
         for ln, l in sorted(mine.items()):
             t = l.get("lap_duration")
             if not t:
@@ -117,22 +128,21 @@ def session_analysis(key, before=None):
             bad = (is_race and ln == 1) or l.get("is_pit_out_lap") or (n, ln) in pit_in or neutral or l.get("deleted")
             series.setdefault(n, []).append([ln, t, 1 if bad else 0])
             if not bad:
-                pts.append((ln, t))
-        if pts:
-            med = median(t for _, t in pts)
-            clean[n] = [(ln, t) for ln, t in pts if t <= med * 1.07]
-
-    # tyre age per lap from the stints
-    comp_at = {}
-    for st in stints:
-        n = st["driver_number"]
-        for ln in range(st.get("lap_start") or 1, (st.get("lap_end") or st.get("lap_start") or 1) + 1):
-            comp_at[(n, ln)] = (st.get("compound") or "UNKNOWN",
-                                (st.get("tyre_age_at_start") or 0) + ln - (st.get("lap_start") or 1), st.get("stint_number"))
+                pts.setdefault(family(n, ln), []).append((ln, t))
+        # slow laps are judged against laps on the same kind of tyre: on intermediates a lap is 10 s+ slower, and
+        # one median over a wet-to-dry race would throw every wet lap out
+        for fam, fpts in pts.items():
+            med = median(t for _, t in fpts)
+            clean.setdefault(n, []).extend((ln, t, fam) for ln, t in fpts if t <= med * 1.07)
+        if n in clean:
+            clean[n].sort()
+    fam_laps = Counter(f for pts in clean.values() for _, _, f in pts)
+    main = "wet" if fam_laps["wet"] > fam_laps["dry"] else "dry"
+    mixed = min(fam_laps["wet"], fam_laps["dry"]) >= 0.1 * max(1, sum(fam_laps.values()))
 
     pace = []
     for n, pts in clean.items():
-        b = _box([t for _, t in pts])
+        b = _box([t for _, t, f in pts if f == main])     # pace on the tyres most of the session was run on
         if b and b["n"] >= 3:
             d = drivers.get(n, {})
             pace.append(dict(d, number=n, **b))
@@ -141,7 +151,7 @@ def session_analysis(key, before=None):
     deg = []
     for st in sorted(stints, key=lambda x: (x["driver_number"], x["stint_number"])):
         n = st["driver_number"]
-        pts = [(comp_at[(n, ln)][1], t) for ln, t in clean.get(n, []) if comp_at.get((n, ln), (None, None, None))[2] == st["stint_number"]]
+        pts = [(comp_at[(n, ln)][1], t) for ln, t, _ in clean.get(n, []) if comp_at.get((n, ln), (None, None, None))[2] == st["stint_number"]]
         if len(pts) < 5:
             continue
         slope = _slope([a for a, _ in pts], [t for _, t in pts])
@@ -226,6 +236,8 @@ def session_analysis(key, before=None):
                     "meeting": src.meeting.get("meeting_name") or s.get("location"), "start": s.get("date_start"),
                     "circuit": s.get("circuit_short_name")},
         "source": src.via, "cut": before, "drivers": drivers, "order": order,
+        # wet and dry running both: the track drying (or getting wetter) swamps tyre wear in the degradation
+        "conditions": {"mixed": mixed, "pace_on": main, "wet_laps": fam_laps["wet"], "dry_laps": fam_laps["dry"]},
         "pace": pace, "deg": deg, "best": best, "lap_chart": chart, "teammates": mates,
         "laps": {str(n): v for n, v in series.items()},
         "strategy": [dict(drivers.get(n, {"code": str(n), "colour": "#888"}), number=n, stints=v)

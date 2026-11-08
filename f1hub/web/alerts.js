@@ -102,6 +102,8 @@ function checkAlerts(d) {
   });
   if (d.weather && p.weather && d.weather.rain && !p.weather.rain) toast("weather", "Rain reported at the track", `track ${d.weather.track}°C`, "#0067ff");
   if (d.weather && p.weather && !d.weather.rain && p.weather.rain) toast("weather", "Rain has stopped", "", "#39b54a");
+  if (d.weather && p.weather && d.weather.low_grip && p.weather.low_grip === false) toast("weather", "Low grip conditions declared", "Race control: the track is wet", "#0067ff");
+  if (d.weather && p.weather && d.weather.low_grip === false && p.weather.low_grip) toast("weather", "Normal grip conditions", "Race control: the track has dried", "#39b54a");
 }
 
 /* ---------- crash detection (f1hub/incidents.py): big banner, list, alerts ---------- */

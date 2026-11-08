@@ -137,7 +137,7 @@ async function xAnalysis() {
 function xRenderAnalysis() {
   const a = XP.analysis; if (!a) return;
   safe("analysis", () => {
-    const s = a.session, race = s.type === "Race", D_ = a.drivers;
+    const s = a.session, race = s.type === "Race", D_ = a.drivers, mixed = !!(a.conditions && a.conditions.mixed);
     const maxLap = Math.max(1, ...a.strategy.flatMap(r => r.stints.map(st => st.to || 0)));
     const lapSeries = [...XP.lapSel].filter(n => a.laps[n]).map(n => ({colour: vis(D_[n].colour), points: a.laps[n].filter(p => !p[2]).map(p => [p[0], p[1]])}));
     const mates = a.teammates.map(m => `<tr><td><div class="drv"><span class="stripe" style="background:${esc(m.colour)}"></span>${esc(m.team)}</div></td>
@@ -164,7 +164,7 @@ function xRenderAnalysis() {
         <div class="row2"><button class="btn" onclick="replaySession(${+s.key})">${ico("play")}Replay it</button><button class="btn" onclick="xShow('lab')">${ico("activity")}Telemetry lab</button></div></div>
       <div class="two">
         <div class="stack">
-          ${race ? `<div class="card"><h2>Race pace <span class="sub">clean laps only: no lap 1, pit laps, SC/VSC or slow outliers · box = middle half, line = median</span></h2><div class="pad">${boxPlot(a.pace)}</div></div>` : ""}
+          ${race ? `<div class="card"><h2>Race pace <span class="sub">clean laps only: no lap 1, pit laps, SC/VSC or slow outliers${mixed ? ` · ${a.conditions.pace_on === "wet" ? "wet-tyre" : "slick"} laps only (mixed conditions)` : ""} · box = middle half, line = median</span></h2><div class="pad">${boxPlot(a.pace)}</div></div>` : ""}
           <div class="card"><h2>Lap times <span class="sub">clean laps · pick drivers</span></h2><div class="pad"><div class="chiprow" style="margin-bottom:8px">${chips}</div>
             ${lineChart(teammateDash(lapSeries), {H: 260, yFmt: v => fmtLap(v), xFmt: v => "L" + Math.round(v)})}</div></div>
           ${race && a.lap_chart.length ? `<div class="card"><h2>Lap chart <span class="sub">position at the end of every lap</span></h2><div class="pad">
@@ -177,7 +177,8 @@ function xRenderAnalysis() {
             <thead><tr><th></th><th>Driver</th><th>Best</th><th class="r">Gap</th><th>Tyre</th><th>Ideal</th><th class="r">Trap</th><th class="r">Laps</th></tr></thead><tbody>${best}</tbody></table></div></div>
           <div class="card"><h2>Team-mates <span class="sub">best lap gap · ${race ? "median race-pace gap" : "median clean-lap gap"}</span></h2><div class="scroll"><table>
             <thead><tr><th>Team</th><th>Faster on one lap</th><th class="r">Best lap</th><th class="r">Pace</th></tr></thead><tbody>${mates}</tbody></table></div></div>
-          ${deg.length ? `<div class="card"><h2>Tyre degradation <span class="sub">seconds lost per lap of tyre age${race ? " · fuel-corrected adds back ~0.06 s/lap of fuel burn (an estimate)" : ""}</span></h2><div class="scroll"><table>
+          ${deg.length ? `<div class="card"><h2>Tyre degradation <span class="sub">seconds lost per lap of tyre age${race ? " · fuel-corrected adds back ~0.06 s/lap of fuel burn (an estimate)" : ""}</span></h2>${mixed ? `
+            <div class="pad muted">Mixed conditions: this session was run on both wet and slick tyres, so a drying (or wetting) track moves lap times more than tyre wear does. A negative figure here is the track getting faster, not the tyre.</div>` : ""}<div class="scroll"><table>
             <thead><tr><th>Driver</th><th>Stint</th><th class="r">Laps</th><th>Avg</th><th class="r">Raw</th><th class="r">${race ? "Fuel-corr." : "s/lap"}</th><th></th></tr></thead><tbody>${degRows}</tbody></table></div></div>` : ""}
         </div>
       </div>`;

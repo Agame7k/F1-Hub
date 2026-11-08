@@ -87,7 +87,7 @@ def neutralisation_counts(rc):
 GROUPS = {
     "flags": ("red", "sector", "blue", "green", "chequered", "black", "black_white", "black_orange", "track_clear"),
     "safety": ("sc", "vsc", "sc_end", "incident"),
-    "stewards": ("penalty", "investigation", "decision", "track_limits", "lap_deleted", "reprimand"),
+    "stewards": ("penalty", "penalty_served", "investigation", "decision", "track_limits", "lap_deleted", "reprimand"),
     "session": ("session", "overtake_mode", "info", "pit", "weather", "start"),
 }
 
@@ -124,6 +124,8 @@ def classify(m):
         return "green"
     if flag == "CLEAR" or "TRACK CLEAR" in msg:
         return "track_clear"
+    if "PENALTY SERVED" in msg:         # "FIA STEWARDS: PENALTY SERVED - 5 SECOND TIME PENALTY FOR CAR 23 (ALB)"
+        return "penalty_served"         # the same penalty again, now taken: not a second one
     if "PENALTY" in msg and "NO FURTHER" not in msg and "WITHOUT" not in msg:
         return "penalty"
     if "REPRIMAND" in msg:
@@ -142,8 +144,8 @@ def classify(m):
         return "incident"
     if "PIT EXIT" in msg or "PIT ENTRY" in msg or "PIT LANE" in msg:
         return "pit"
-    if "RAIN" in msg or "WET" in msg:
-        return "weather"
+    if "RAIN" in msg or "WET" in msg or "GRIP" in msg or "AWNING" in msg:
+        return "weather"                # incl. LOW GRIP CONDITIONS / LOW GRIP DELTA ACTIVE (2026: a wet track)
     if "FORMATION" in msg or "START" in msg or "RESUMPTION" in msg or "PUSH CARS" in msg:
         return "start"
     return "info"
@@ -167,6 +169,7 @@ class RaceControl:
         self.per_driver = {}        # number -> tallies + list of stewarding items
         self.periods = []           # neutralisations: {"kind", "start_lap", "end_lap", "start", "end"}
         self.overtake_mode = None   # True / False / None (unknown)
+        self.low_grip = None        # race control's LOW / NORMAL GRIP CONDITIONS (2026: the track is declared wet)
         self.counts = {}
 
     def _driver(self, n):
@@ -203,6 +206,12 @@ class RaceControl:
         elif kind in ("sc_end", "green", "track_clear") or (kind == "session" and "STARTED" in msg.upper()):
             if self.periods and self.periods[-1]["end"] is None and kind != "track_clear":
                 self.periods[-1]["end"], self.periods[-1]["end_lap"] = m["date"], m.get("lap_number")
+        if kind == "weather":
+            up = msg.upper()
+            if "LOW GRIP CONDITIONS" in up:
+                self.low_grip = True
+            elif "NORMAL GRIP CONDITIONS" in up:
+                self.low_grip = False
         if kind == "overtake_mode":
             up = msg.upper()
             if "ENABLED" in up:
@@ -218,8 +227,8 @@ class RaceControl:
             d = self._driver(n)
             if kind in tally:
                 d[tally[kind]] += 1
-            if kind in ("penalty", "investigation", "decision", "reprimand", "black", "black_white", "black_orange",
-                        "lap_deleted", "track_limits"):
+            if kind in ("penalty", "penalty_served", "investigation", "decision", "reprimand", "black", "black_white",
+                        "black_orange", "lap_deleted", "track_limits"):
                 d["items"].append({"lap": rec["lap"], "time": rec["time"], "kind": kind, "text": msg, "cars": cars})
         return rec
 
@@ -292,6 +301,7 @@ class RaceControl:
             "drivers": drivers,
             "periods": self.periods,
             "overtake_mode": self.overtake_mode,
+            "low_grip": self.low_grip,
             "counts": self.counts,
             "stewards": [dict(m, codes=[code_of(n) for n in m["cars"]]) for m in self.stewards()[:60]],
             "red_flag": dict(self.red, order_codes=[code_of(n) for n in self.red["order"]],

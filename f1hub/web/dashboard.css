@@ -72,7 +72,7 @@
   .msg:first-child { border-top: 0; }
   .msg .when { color: var(--muted); }
   .k-red { border-left-color: var(--red); } .k-sc, .k-vsc, .k-sc_end, .k-incident { border-left-color: var(--amber); }
-  .k-penalty, .k-black, .k-black_white { border-left-color: #ff5050; } .k-investigation, .k-reprimand { border-left-color: #ff8a3d; }
+  .k-penalty, .k-penalty_served, .k-black, .k-black_white { border-left-color: #ff5050; } .k-investigation, .k-reprimand { border-left-color: #ff8a3d; }
   .k-sector { border-left-color: var(--yellow); } .k-blue { border-left-color: var(--blue); }
   .k-lap_deleted, .k-track_limits { border-left-color: #c77dff; } .k-green, .k-track_clear { border-left-color: var(--green); }
   .k-decision { border-left-color: #666; }

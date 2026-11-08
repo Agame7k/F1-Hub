@@ -4,7 +4,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 
 from f1hub.live import LiveTracker
-from f1hub.racecontrol import classify, neutral_periods, neutralisation, neutralisation_counts
+from f1hub.racecontrol import RaceControl, classify, neutral_periods, neutralisation, neutralisation_counts
 from f1hub.report import RaceReport
 from isolation import setUpModule, tearDownModule  # noqa: F401  (offline, temporary cache)
 
@@ -40,7 +40,7 @@ REAL = [
     ("Other", None, None, "FIA STEWARDS: BLACK FLAG FOR CAR 27 (HUL)", "black", None),
     ("Other", None, None, "FIA STEWARDS: 10 SECOND TIME PENALTY FOR CAR 50 (BEA) - CAUSING A COLLISION", "penalty", None),
     ("Other", None, None, "FIA STEWARDS: PENALTY SERVED - DRIVE THROUGH PENALTY FOR CAR 55 (SAI) - SPEEDING IN THE PIT LANE",
-     "penalty", None),
+     "penalty_served", None),
     ("Other", None, None, "FIA STEWARDS: REPRIMAND (DRIVING) FOR CAR 87 (BEA) - REVERSING IN THE PIT LANE (14:59:59)",
      "reprimand", None),
     ("Other", None, None, "TURN 10 INCIDENT INVOLVING CARS 50 (BEA) AND 43 (COL) NOTED - CAUSING A COLLISION",
@@ -57,6 +57,15 @@ REAL = [
     ("Other", None, None, "RECOVERY VEHICLE ON TRACK AT TURN 17", "incident", None),
     ("Other", None, None, "PIT EXIT CLOSED", "pit", None),
     ("Other", None, None, "RISK OF RAIN FOR F1 RACE IS 100%", "weather", None),
+    ("Other", None, None, "LOW GRIP CONDITIONS", "weather", None),        # Sao Paulo 2026
+    ("Other", None, None, "LOW GRIP DELTA ACTIVE", "weather", None),
+    ("Other", None, None, "NORMAL GRIP CONDITIONS", "weather", None),
+    ("Other", None, None, "AWNINGS MAY BE USED", "weather", None),
+    ("Other", None, None, "OVERTAKE DISABLED", "overtake_mode", None),
+    ("Other", None, None, "YELLOW IN PIT LANE", "pit", None),
+    ("Other", None, None, "RACE START", "start", None),
+    ("Other", None, None, "INCIDENT INVOLVING CAR 27 (HUL) NOTED - FAILING TO FOLLOW RACE DIRECTORS INSTRUCTIONS – "
+     "PRACTICE START INFRINGEMENT (13:20:45)", "investigation", None),
     ("Other", None, None, "FORMATION LAP WILL START AT 12:47", "start", None),
     ("Other", None, None, "FIRST CAR TO TAKE THE FLAG - CAR 44 (HAM)", "info", None),
 ]
@@ -118,6 +127,26 @@ class OneReading(unittest.TestCase):
             t._track_status(m)
             seen.append(t.track_status)
         self.assertEqual(seen, ["GREEN", "VSC", "GREEN", "SC", "GREEN", "RED", "RED", "RED", "RED", "GREEN"])
+
+
+class Stewarding(unittest.TestCase):
+    def test_a_served_penalty_is_not_a_second_one(self):
+        rc = RaceControl("-03:00:00")
+        rc.add(at(0, "Other", "FIA STEWARDS: 5 SECOND TIME PENALTY FOR CAR 23 (ALB) - REJOINING UNSAFELY (14:50:05)"))
+        rc.add(at(240, "Other", "FIA STEWARDS: PENALTY SERVED - 5 SECOND TIME PENALTY FOR CAR 23 (ALB) (14:50:05)"))
+        d = rc.per_driver[23]
+        self.assertEqual(d["penalties"], 1)
+        self.assertEqual([i["kind"] for i in d["items"]], ["penalty", "penalty_served"])
+        self.assertEqual(rc.counts.get("penalty"), 1)
+
+    def test_low_grip_conditions(self):
+        rc = RaceControl()
+        self.assertIsNone(rc.low_grip)
+        rc.add(at(0, "Other", "LOW GRIP CONDITIONS"))
+        self.assertTrue(rc.low_grip)
+        rc.add(at(60, "Other", "NORMAL GRIP CONDITIONS"))
+        self.assertIs(rc.low_grip, False)
+        self.assertIs(rc.snapshot(str)["low_grip"], False)
 
 
 if __name__ == "__main__":

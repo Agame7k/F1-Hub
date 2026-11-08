@@ -38,7 +38,7 @@ Leave out `channels` to get all of them. An unknown channel returns a 400 with t
 | `positions` | Every car's newest map position: `number`, `code`, `pos`, `colour`, `x`, `y` (OpenF1 units, tenths of a metre) and `t` (epoch ms of that sample) |
 | `positions.<CODE>` | One car, by its three-letter code (`positions.VER`) or car number (`positions.1`) |
 | `race_control` | One message: `lap`, `time` (UTC, `HH:MM:SS`), `category`, `flag`, `text` |
-| `weather` | `track`, `air` (°C), `rain`, `humidity`, `wind` |
+| `weather` | `track`, `air` (°C), `rain`, `humidity`, `wind`, `low_grip` (race control has declared low grip conditions, i.e. a wet track: `true` / `false` / `null` if not announced) |
 | `track` | `status` and `sector_flags` (marshal sector number to `YELLOW` / `DOUBLE YELLOW`) |
 
 Positions update a few times a second while cars are moving, so ask for `positions` only if you use it.

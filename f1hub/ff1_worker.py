@@ -10,10 +10,12 @@ Everything handed back is shaped like OpenF1's rows, so the dashboard's tracker 
 Sessions are referred to by a "ref": {"year", "round", "idx"} (idx = FastF1's session number 1-5), plus
 "livedata": [files] for a recording.
 """
+import ast
 import gzip
 import json
 import math
 import os
+import re
 import signal
 import sys
 import time
@@ -111,6 +113,117 @@ def _ref_key(ref):
     return json.dumps(ref, sort_keys=True)
 
 
+def _is_keyframe(line):
+    return line.rstrip().endswith(", '']")
+
+
+def _keyframe_stamp(lines):
+    """When the recorder connected: the keyframe Heartbeat's Utc, else the first timestamped line's time."""
+    for line in lines:
+        if not _is_keyframe(line):
+            m = re.search(r"'(\d{4}-\d\d-\d\dT[^']+)'\]\s*$", line)
+            if m:
+                return m.group(1)
+            continue
+        if line.startswith("['Heartbeat'"):
+            try:
+                utc = json.loads(ast.literal_eval(line.strip())[1]).get("Utc") or ""
+            except (ValueError, SyntaxError, AttributeError):
+                continue
+            if len(utc) >= 19:
+                return utc[:23].rstrip("Z") + "Z"
+    return None
+
+
+def _decode_keyframes(lines):
+    """FastF1 3.9's client opens a recording with a keyframe: the full state at the moment it connected (session
+    info, the session start, driver list, starting tyres, race control so far...) as JSON strings with an empty
+    timestamp. FastF1's own reader can't parse those lines and drops them silently, so a recording started after
+    the session began loses its session info and start time and won't load. Rewrite them as normal lines, stamped
+    with the connection time."""
+    stamp = None
+    out = []
+    for line in lines:
+        if _is_keyframe(line):
+            stamp = stamp or _keyframe_stamp(lines)
+            try:
+                cat, payload, _ = ast.literal_eval(line.strip())
+                msg = json.loads(payload) if isinstance(payload, str) else payload
+            except (ValueError, SyntaxError, TypeError):
+                out.append(line)
+                continue
+            at = stamp
+            if cat == "SessionStatus" and isinstance(msg, dict) and msg.get("Status") == "Started":
+                at = _started_at(lines) or stamp      # the session began before the recorder joined: say when
+            if at:
+                # FastF1's reader turns ' into " before decoding: keep apostrophes inside strings out of its way
+                line = json.dumps([cat, msg, at]).replace("'", "\\u0027") + "\n"
+        out.append(line)
+    return out
+
+
+def _started_at(lines):
+    """The first 'Started' in SessionData's StatusSeries (list in a keyframe, dict in an update): its Utc string."""
+    for line in lines:
+        if "SessionData" not in line[:20] or "Started" not in line:
+            continue
+        try:
+            if _is_keyframe(line):
+                msg = json.loads(ast.literal_eval(line.strip())[1])
+            else:
+                msg = json.loads(line.replace("'", '"').replace("True", "true").replace("False", "false"))[1]
+            series = msg.get("StatusSeries") or []
+            entries = series.values() if isinstance(series, dict) else series
+            for e in entries:
+                if isinstance(e, dict) and e.get("SessionStatus") == "Started" and e.get("Utc"):
+                    return e["Utc"]
+        except (ValueError, SyntaxError, AttributeError, IndexError, TypeError):
+            continue
+    return None
+
+
+def _livedata(files):
+    from fastf1.livetiming.data import LiveTimingData
+
+    class RecordingData(LiveTimingData):
+        def _load_single_file(self, data, *, is_first_file, next_line):
+            data = _decode_keyframes(data)
+            if next_line is not None:
+                next_line = _decode_keyframes([next_line])[0]
+            super()._load_single_file(data, is_first_file=is_first_file, next_line=next_line)
+
+        def _try_set_correct_start_date(self, data):
+            # FastF1's version takes the first line mentioning SessionStatus and Started, which in a keyframe is
+            # SessionInfo (no StatusSeries): look in SessionData instead
+            from fastf1.utils import to_datetime
+            started = _started_at(data)
+            self._start_date = to_datetime(started) if started else None
+
+    return RecordingData(*files)
+
+
+def _snapshot_only(files):
+    """Nothing but the keyframe (and heartbeats): recorded after the session ended."""
+    for f in files:
+        try:
+            with open(f) as fh:
+                for line in fh:
+                    if not _is_keyframe(line) and not line.startswith("['Heartbeat'"):
+                        return False
+        except OSError:
+            return False
+    return True
+
+
+def _no_parse_cache():
+    """FastF1 caches what it parses under the session's archive path, whether it came from F1's archive or from a
+    recording: a recording read part-way through (or a second recording of the session) would then be served the
+    stale copy, and so would F1's archive after an F1 TV sign-in. Recordings are parsed fresh every time (the
+    export they produce is cached by F1 Hub, keyed by the file's mtime); downloads stay cached."""
+    import fastf1
+    return fastf1.Cache.disabled(disable_http_cache=False)
+
+
 def load(ref, telemetry=True):
     import fastf1
     k = _ref_key(dict(ref, telemetry=telemetry))
@@ -120,9 +233,19 @@ def load(ref, telemetry=True):
     s = fastf1.get_session(int(ref["year"]), int(ref["round"]), int(ref["idx"]))
     kw = {"laps": True, "telemetry": telemetry, "weather": True, "messages": True}
     if ref.get("livedata"):
-        from fastf1.livetiming.data import LiveTimingData
-        kw["livedata"] = LiveTimingData(*ref["livedata"])
-    s.load(**kw)
+        kw["livedata"] = _livedata(ref["livedata"])
+        with _no_parse_cache():
+            s.load(**kw)
+        s._f1hub_livedata = kw["livedata"]
+    else:
+        s.load(**kw)
+    if ref.get("livedata") and s._t0_date is None and kw["livedata"]._start_date is not None:
+        # a recording of F1's free feed has no car telemetry, which is what FastF1 works t0 out from; but a
+        # recording's session times all count from its own start date, so that is t0
+        import pandas as pd
+        s._t0_date = pd.Timestamp(kw["livedata"]._start_date).round("ms")
+        if hasattr(s, "_laps"):
+            s._laps["LapStartDate"] = s._laps["LapStartTime"] + s._t0_date
     try:
         ok = s.t0_date is not None and not s.laps.empty
     except Exception:
@@ -130,6 +253,9 @@ def load(ref, telemetry=True):
     if not ok:
         msg = ("This recording has no lap timing yet - record while a session is running (it can be played back part-way through)"
                if ref.get("livedata") else "F1's live-timing archive returned no data for this session")
+        if ref.get("livedata") and _snapshot_only(ref["livedata"]):
+            msg = ("This recording only holds the snapshot F1 sends on connecting - it was started after the session had"
+                   " finished, so there are no laps to play back")
         if int(ref["year"]) >= 2023 and not ref.get("livedata") and not auth_status()["signed_in"]:
             msg += (" - from 2023 on F1 only serves it with an F1 TV login: sign in from Explore > FastF1, or put"
                     " F1_USERNAME and F1_PASSWORD in .openf1.env and restart F1 Hub")
@@ -174,6 +300,124 @@ def _status_rows(s, quali):
     return out
 
 
+def _merged_lines(ld, topic):
+    """A live-timing topic's per-driver Lines with every update applied: the state at the end of the recording."""
+    def merge(a, b):
+        for k, v in b.items():
+            if isinstance(v, dict) and isinstance(a.get(k), dict):
+                merge(a[k], v)
+            else:
+                a[k] = v
+    out = {}
+    for _, msg in (ld.get(topic) if ld.has(topic) else []):
+        lines = msg.get("Lines") if isinstance(msg, dict) else None
+        if isinstance(lines, dict):
+            for n, v in lines.items():
+                if isinstance(v, dict):
+                    merge(out.setdefault(n, {}), v)
+    return out
+
+
+def _recorded_results(s, kind, quali, year, start, t0):
+    """The classification and grid from a recording's own timing, for when FastF1 has none: it takes them from
+    Ergast, which hasn't got a session that has only just finished. Provisional: decisions after the flag aren't
+    in it."""
+    import rules
+    ld = getattr(s, "_f1hub_livedata", None)
+    if ld is None:
+        return None, None
+    final = _merged_lines(ld, "TimingData")
+    app = _merged_lines(ld, "TimingAppData")
+    if not final:
+        return None, None
+    rows = {}
+    for n, v in final.items():
+        dn = num(n, int)
+        if dn is None:
+            continue
+        best = v.get("BestLapTimes") or []          # qualifying: one per segment (a list, or a dict of updates)
+        best = [best[k] for k in sorted(best, key=int)] if isinstance(best, dict) else best
+        rows[dn] = {"pos": num(v.get("Position"), int), "laps": num(v.get("NumberOfLaps"), int) or 0,
+                    "gap": v.get("GapToLeader"),
+                    "best": [secs_of(b.get("Value")) if isinstance(b, dict) else None for b in best]}
+    grid = []
+    if kind == "Race":
+        for n, v in app.items():
+            g = num(v.get("GridPos"), int)
+            if g and num(n, int) is not None:
+                grid.append({"driver_number": int(n), "position": g})
+    result = []
+    lead = max((r["laps"] for r in rows.values()), default=0)
+    sprint = s.name == "Sprint"
+    table = rules.rules_for(year)["sprint_points" if sprint else "gp_points"]
+    winner_time = None
+    if kind == "Race":
+        laps = s.laps
+        first = sorted(((r["pos"], dn) for dn, r in rows.items() if r["pos"]), key=lambda x: x[0])
+        if first:
+            won = laps[laps["DriverNumber"] == str(first[0][1])]
+            if not won.empty and won["Time"].notna().any():
+                winner_time = secs(t0 + won["Time"].max() - start)
+    for dn, r in rows.items():
+        out = {"driver_number": dn, "number_of_laps": r["laps"], "dns": False, "dsq": False}
+        if kind == "Race":
+            # classified: covered 90% of the winner's distance (rounded down to whole laps), retired or not
+            classified = r["laps"] > 0 and r["laps"] >= int(lead * 0.9)
+            pos = r["pos"] if classified else None
+            out.update(position=pos, dnf=not classified,
+                       points=float(table[pos - 1]) if pos and pos <= len(table) else 0.0,
+                       duration=winner_time if pos == 1 else None,
+                       gap_to_leader=0 if pos == 1 else _gap(r["gap"]) if pos else None)
+        else:
+            out.update(position=r["pos"], dnf=False, points=None)
+            if quali:
+                out["duration"] = (r["best"] + [None] * 3)[:3]
+            else:
+                out["duration"] = next((b for b in r["best"] if b), None)
+        result.append(out)
+    return result, grid
+
+
+def _recorded_radio(s, key, mk):
+    """Team radio clips from a recording's TeamRadio topic, as OpenF1's team_radio rows (FastF1 doesn't read them).
+    The keyframe repeats the clips so far, so they're de-duplicated."""
+    import pandas as pd
+    ld = getattr(s, "_f1hub_livedata", None)
+    if ld is None or not ld.has("TeamRadio"):
+        return []
+    base = "https://livetiming.formula1.com" + s.api_path
+    out, seen = [], set()
+    for _, msg in ld.get("TeamRadio"):
+        caps = msg.get("Captures") if isinstance(msg, dict) else None
+        caps = caps.values() if isinstance(caps, dict) else caps or []
+        for c in caps:
+            if not isinstance(c, dict) or not c.get("Path") or not c.get("Utc"):
+                continue
+            n = num(c.get("RacingNumber"), int)
+            if n is None or (n, c["Path"]) in seen:
+                continue
+            seen.add((n, c["Path"]))
+            try:
+                date = iso(pd.Timestamp(c["Utc"]))
+            except ValueError:
+                continue
+            out.append({"date": date, "driver_number": n, "recording_url": base + c["Path"],
+                        "session_key": key, "meeting_key": mk})
+    out.sort(key=lambda r: r["date"])
+    return out
+
+
+def secs_of(v):
+    """A live-timing time string ("1:18.737", "48.861") -> seconds."""
+    if not v or not isinstance(v, str):
+        return None
+    try:
+        m, _, sec = v.rpartition(":")
+        return round(int(m or 0) * 60 + float(sec), 3)
+    except ValueError:
+        return None
+
+
 def export(ref, out_path):
     """Load the whole session and write it as OpenF1-shaped rows + compact telemetry (gzip JSON)."""
     s = load(ref)
@@ -188,8 +432,11 @@ def export(ref, out_path):
     quali = "Qualifying" in name or "Shootout" in name
     kind = "Race" if name in ("Race", "Sprint") else "Qualifying" if quali else "Practice"
     gmt = info.get("GmtOffset")
-    gmt = (f"{int(gmt.total_seconds() // 3600):02d}:{int(gmt.total_seconds() % 3600 // 60):02d}:00"
-           if gmt is not None and gmt == gmt else "00:00:00")
+    if gmt is not None and gmt == gmt:
+        mins = int(gmt.total_seconds() // 60)
+        gmt = f"{'-' if mins < 0 else ''}{abs(mins) // 60:02d}:{abs(mins) % 60:02d}:00"     # OpenF1's "-03:00:00"
+    else:
+        gmt = "00:00:00"
     t0 = s.t0_date
     statuses = s.session_status
     started = [t0 + r["Time"] for _, r in statuses.iterrows() if str(r["Status"]) == "Started"]
@@ -236,6 +483,15 @@ def export(ref, out_path):
             row["duration"] = secs(r.get("Time")) if pos == 1 else None
             row["gap_to_leader"] = secs(r.get("Time")) if pos and pos > 1 else 0 if pos == 1 else None
         result.append(row)
+
+    if not any(r["position"] for r in result) and ref.get("livedata"):
+        rec_result, rec_grid = _recorded_results(s, kind, quali, year, start, t0)
+        if rec_result:
+            by = {r["driver_number"]: r for r in rec_result}
+            for row in result:
+                row.update(by.get(row["driver_number"], {}))
+        if rec_grid and not grid:
+            grid = [dict(g, session_key=key) for g in rec_grid]
 
     laps, stints, pits = [], [], []
     L = s.laps
@@ -298,8 +554,8 @@ def export(ref, out_path):
         from fastf1 import api as fapi
     try:
         if ref.get("livedata"):
-            from fastf1.livetiming.data import LiveTimingData
-            _, stream = fapi.timing_data(s.api_path, livedata=LiveTimingData(*ref["livedata"]))
+            with _no_parse_cache():
+                _, stream = fapi.timing_data(s.api_path, livedata=_livedata(ref["livedata"]))
         else:
             _, stream = fapi.timing_data(s.api_path)
         last_pos, last_iv = {}, {}
@@ -348,7 +604,7 @@ def export(ref, out_path):
     data = {"session": session, "meeting": meet, "drivers": drivers, "starting_grid": grid, "session_result": result,
             "scheduled_laps": num(getattr(s, "total_laps", None), int) if kind == "Race" else None,
             "rows": {"laps": laps, "stints": stints, "pit": pits, "race_control": rc, "weather": weather,
-                     "position": position, "intervals": intervals, "overtakes": [], "team_radio": [],
+                     "position": position, "intervals": intervals, "overtakes": [], "team_radio": _recorded_radio(s, key, mk),
                      "championship_drivers": []},
             "telemetry": tel, "exported": time.time()}
     tmp = out_path + ".part"

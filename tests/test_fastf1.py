@@ -212,5 +212,73 @@ class SignInTimeout(unittest.TestCase):
         self.assertIn("timed out", login.status()["error"])
 
 
+def _worker():
+    """f1hub/ff1_worker.py, imported for its pure helpers (it sends print() to stderr on import: put it back)."""
+    out = sys.stdout
+    from f1hub import ff1_worker
+    sys.stdout = out
+    return ff1_worker
+
+
+# how FastF1 3.9's client opens a recording made after the session started (Sao Paulo 2026, trimmed): a keyframe
+# of JSON strings with no timestamp, then the usual updates
+KEYFRAME_RECORDING = [
+    """['Heartbeat', '{"Utc": "2026-11-08T17:04:41.4479134Z", "_kf": true}', '']\n""",
+    """['SessionInfo', '{"Meeting": {"Name": "S\\u00e3o Paulo Grand Prix"}, "SessionStatus": "Started", "Path": "2026/x/", "_kf": true}', '']\n""",
+    """['SessionStatus', '{"Status": "Started", "Started": "Started", "_kf": true}', '']\n""",
+    """['RaceControlMessages', '{"Messages": [{"Utc": "2026-11-08T16:13:18", "Lap": 1, "Category": "Other", "Message": "DRIVER\\'S NOTE"}], "_kf": true}', '']\n""",
+    """['SessionData', '{"Series": [{"Utc": "2026-11-08T16:09:44.305Z", "Lap": 1}], "StatusSeries": [{"Utc": "2026-11-08T16:06:17.567Z", "TrackStatus": "Yellow"}, {"Utc": "2026-11-08T17:03:21.863Z", "SessionStatus": "Started"}], "_kf": true}', '']\n""",
+    """['TimingData', {'Lines': {'1': {'GapToLeader': '+1.424'}}}, '2026-11-08T17:04:44.285Z']\n""",
+]
+
+
+class RecordingKeyframes(unittest.TestCase):
+    def test_keyframe_lines_become_readable(self):
+        w = _worker()
+        out = w._decode_keyframes(KEYFRAME_RECORDING)
+        self.assertEqual(out[-1], KEYFRAME_RECORDING[-1])            # ordinary lines untouched
+        for line in out[:-1]:
+            # what FastF1's reader does to every line before decoding it
+            cat, msg, at = json.loads(line.replace("'", '"').replace("True", "true").replace("False", "false"))
+            self.assertIsInstance(msg, dict)
+            self.assertTrue(at)
+        cat, msg, at = json.loads(out[3].replace("'", '"'))
+        self.assertEqual(msg["Messages"][0]["Message"], "DRIVER'S NOTE")   # apostrophe survives the quote swap
+        self.assertEqual(at, "2026-11-08T17:04:41.447Z")                   # stamped when the recorder joined
+        cat, msg, at = json.loads(out[2])
+        self.assertEqual((cat, at), ("SessionStatus", "2026-11-08T17:03:21.863Z"))  # ...but the start when it began
+
+    def test_session_start_comes_from_session_data(self):
+        w = _worker()
+        self.assertEqual(w._started_at(KEYFRAME_RECORDING), "2026-11-08T17:03:21.863Z")
+        self.assertEqual(w._started_at(w._decode_keyframes(KEYFRAME_RECORDING)), "2026-11-08T17:03:21.863Z")
+        update = """['SessionData', {'StatusSeries': {'3': {'Utc': '2026-11-08T17:00:00Z', 'SessionStatus': 'Started'}}}, '2026-11-08T17:00:00Z']\n"""
+        self.assertEqual(w._started_at([update]), "2026-11-08T17:00:00Z")
+        self.assertIsNone(w._started_at(KEYFRAME_RECORDING[:4]))
+
+    def test_final_timing_state(self):
+        w = _worker()
+
+        class Live:
+            data = {"TimingData": [[0, {"Lines": {"1": {"Position": "3", "NumberOfLaps": 1}}}],
+                                   [1, {"Lines": {"1": {"Position": "1", "IntervalToPositionAhead": {"Value": "+0.5"}}}}],
+                                   [2, {"Lines": {"1": {"NumberOfLaps": 71, "IntervalToPositionAhead": {"Catching": True}}}}]]}
+            has = lambda self, t: t in self.data
+            get = lambda self, t: self.data[t]
+        final = w._merged_lines(Live(), "TimingData")["1"]
+        self.assertEqual((final["Position"], final["NumberOfLaps"]), ("1", 71))
+        self.assertEqual(final["IntervalToPositionAhead"], {"Value": "+0.5", "Catching": True})
+        self.assertEqual(w._merged_lines(Live(), "TimingAppData"), {})
+
+    def test_times_and_gaps(self):
+        w = _worker()
+        self.assertEqual(w.secs_of("1:18.737"), 78.737)
+        self.assertEqual(w.secs_of("48.861"), 48.861)
+        self.assertIsNone(w.secs_of(""))
+        self.assertEqual(w._gap("1 L"), "+1 LAP")
+        self.assertEqual(w._gap("2 L"), "+2 LAPS")
+        self.assertEqual(w._gap("+14.602"), 14.602)
+
+
 if __name__ == "__main__":
     unittest.main()

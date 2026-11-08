@@ -837,7 +837,9 @@ class LiveTracker:
             "updated": self.updated.isoformat() if self.updated else None,
             "weather": {"track": w.get("track_temperature"), "air": w.get("air_temperature"),
                         "rain": bool(w.get("rainfall")), "humidity": w.get("humidity"),
-                        "wind": w.get("wind_speed")} if w else None,
+                        "wind": w.get("wind_speed"),
+                        # F1's rain sensor can lag a shower by many minutes; race control declaring low grip doesn't
+                        "low_grip": self.rc.low_grip} if w else None,
             "rows": rows,
             "messages": [{"lap": m.get("lap_number"), "time": m["date"][11:19], "category": m.get("category"),
                           "flag": m.get("flag"), "text": m.get("message")} for m in self.messages[-40:]][::-1],

@@ -152,7 +152,7 @@ function preCard(d) {
     q.pole ? ["Pole", `${chip(q.pole)} ${fmtLap(q.pole.time)}`] : null,
     (q.front_row || []).length ? ["Front row", q.front_row.map(chip).join(" ")] : null,
     loss.normal ? ["Pit stop costs", `<b>${loss.normal.toFixed(1)}s</b>${loss.sc ? ` <span class="muted">· SC ${loss.sc.toFixed(1)}s</span>` : ""}${loss.vsc ? ` <span class="muted">· VSC ${loss.vsc.toFixed(1)}s</span>` : ""}`] : null,
-    d.weather ? ["Track / air", `<b>${d.weather.track ?? "-"}°C</b> / ${d.weather.air ?? "-"}°C${d.weather.rain ? ' <b style="color:#4aa3ff">rain</b>' : ""}`] : null,
+    d.weather ? ["Track / air", `<b>${d.weather.track ?? "-"}°C</b> / ${d.weather.air ?? "-"}°C${d.weather.rain ? ' <b style="color:#4aa3ff">rain</b>' : d.weather.low_grip ? ' <b style="color:#4aa3ff">low grip</b>' : ""}`] : null,
   ].filter(Boolean).map(([k, v]) => `<span>${k}</span><span>${v}</span>`).join("");
   const pens = [...(q.penalties || []).map(p => `${chip(p)} P${p.quali} → <b>P${p.grid}</b>`),
                 ...(q.missing || []).map(p => `${chip(p)} P${p.quali} → <b>pit lane / not starting</b>`)];
@@ -256,7 +256,8 @@ function renderLive(d) {
   $("wx").innerHTML = w ? `<div><span class="muted">Track</span><b>${w.track ?? "-"}°C</b></div>
     <div><span class="muted">Air</span><b>${w.air ?? "-"}°C</b></div><div><span class="muted">Humidity</span><b>${w.humidity ?? "-"}%</b></div>
     <div><span class="muted">Wind</span><b>${w.wind ?? "-"} m/s</b></div>
-    <div><span class="muted">Rain</span><b style="color:${w.rain ? "#4aa3ff" : "inherit"}">${w.rain ? "YES" : "No"}</b></div>` : `<span class="muted">-</span>`;
+    <div><span class="muted">Rain</span><b style="color:${w.rain ? "#4aa3ff" : "inherit"}">${w.rain ? "YES" : "No"}</b></div>${w.low_grip ? `
+    <div><span class="muted">Grip</span><b style="color:#4aa3ff">LOW</b></div>` : ""}` : `<span class="muted">-</span>`;
   $("rcmini").innerHTML = d.rc.messages.filter(m => !["sector", "blue"].includes(m.kind)).slice(0, 12).map(msgRow).join("") || `<div class="msg muted">No messages yet</div>`;
 }
 
