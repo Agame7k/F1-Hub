@@ -4,7 +4,6 @@ A tiny dependency-free MQTT 3.1.1 subscriber (QoS 0). Messages are buffered per 
 drained by the LiveTracker each tick, so data arrives within a second or two instead of
 waiting for the next REST poll - and none of it counts towards the 60 requests/minute limit.
 """
-import gzip
 import json
 import os
 import socket
@@ -23,6 +22,7 @@ TOPICS = ("position", "intervals", "race_control", "laps", "location", "car_data
           "weather", "overtakes", "team_radio", "pit", "stints")
 MAX_BUFFER = 20000          # per topic, so a stalled consumer can't eat all the memory
 RECORD_EVERY = 5.0          # seconds between flushes of the raw-message recording
+SUBACK_WAIT = 20            # seconds for the broker to confirm the subscription
 
 
 def _varint(n):
@@ -32,6 +32,19 @@ def _varint(n):
         out.append(b | (0x80 if n else 0))
         if not n:
             return bytes(out)
+
+
+def normalise_dates(row):
+    """A streamed row's dates in REST's form, in place: some topics leave out the UTC offset, or end in Z.
+    (A recording keeps messages as they came, so recordings.py does this again when it reads them.)"""
+    for k in ("date", "date_start"):
+        v = row.get(k)
+        if isinstance(v, str) and len(v) >= 19:
+            if v.endswith("Z"):
+                row[k] = v[:-1] + "+00:00"
+            elif "+" not in v[19:] and "-" not in v[19:]:
+                row[k] = v + "+00:00"
+    return row
 
 
 def _str(s):
@@ -47,6 +60,8 @@ class Stream:
         self.connected = False
         self.last_msg = 0.0
         self.error = None
+        self.subscribed = False     # the broker confirmed the subscription (SUBACK)
+        self.refused = []           # topics it turned down
         self.received = 0
         self._stop = False
         self._sock = None
@@ -59,7 +74,7 @@ class Stream:
     # ------------------------------------------------------------------ consumer side
     @property
     def healthy(self):
-        return self.connected and time.time() - self.last_msg < 60
+        return self.connected and self.subscribed and time.time() - self.last_msg < 60
 
     def drain(self, topic, session_key=None):
         """All buffered rows for a topic (oldest first), optionally only for one session."""
@@ -79,7 +94,8 @@ class Stream:
         return out
 
     def status(self):
-        return {"connected": self.connected, "healthy": self.healthy, "received": self.received,
+        return {"connected": self.connected, "subscribed": self.subscribed, "refused": self.refused,
+                "healthy": self.healthy, "received": self.received,
                 "last_msg_age": round(time.time() - self.last_msg, 1) if self.last_msg else None,
                 "error": self.error, "lag": self.lag()}
 
@@ -101,7 +117,7 @@ class Stream:
                 backoff = 2
             except Exception as e:      # network drop, expired token, ... -> reconnect
                 self.error = f"{type(e).__name__}: {e}"
-            self.connected = False
+            self.connected = self.subscribed = False
             if self._stop:
                 return
             time.sleep(backoff)
@@ -110,7 +126,7 @@ class Stream:
     def _session(self):
         token = api._auth_token()
         if not token:
-            raise RuntimeError("no OpenF1 login - streaming needs a paid account")
+            raise RuntimeError(api.login_error() or "no OpenF1 login - streaming needs a paid account")
         raw = socket.create_connection((HOST, PORT), timeout=15)
         sock = ssl.create_default_context().wrap_socket(raw, server_hostname=HOST)
         self._sock = sock
@@ -124,8 +140,8 @@ class Stream:
             raise RuntimeError(f"MQTT connect refused (code {body[1] if len(body) > 1 else '?'})")
         subs = b"".join(_str(f"v1/{t}") + b"\x00" for t in self.topics)
         sock.sendall(b"\x82" + _varint(2 + len(subs)) + struct.pack("!H", 1) + subs)
-        self.connected, self.error = True, None
-        self.last_msg = time.time()
+        self.connected, self.error, self.subscribed, self.refused = True, None, False, []
+        self.last_msg = asked = time.time()
         sock.settimeout(KEEPALIVE / 2)
         last_ping = time.time()
         while not self._stop:
@@ -134,27 +150,44 @@ class Stream:
                 last_ping = time.time()
             if time.time() - self._rec_at > RECORD_EVERY:
                 self._flush_record()
+            if not self.subscribed and time.time() - asked > SUBACK_WAIT:
+                raise RuntimeError("the broker never confirmed the subscription")
             try:
                 ptype, body = self._read(sock)
             except socket.timeout:
                 continue
             if ptype == 3:
                 self._publish(body)
+            elif ptype == 9:
+                self._suback(body)
+
+    def _suback(self, body):
+        """SUBACK: a return code per topic, in the order asked; 0x80 means refused. Without checking it, a refused
+        subscription looked like a quiet session."""
+        codes = body[2:]
+        self.refused = [t for t, rc in zip(self.topics, codes) if rc == 0x80]
+        if len(codes) < len(self.topics) or len(self.refused) == len(self.topics):
+            raise RuntimeError("the broker refused the subscription - is streaming included in this OpenF1 account?")
+        self.subscribed = True
+        if self.refused:
+            self.error = "the broker refused some topics: " + ", ".join(self.refused)
 
     # ------------------------------------------------------------------ recording
     def _flush_record(self):
-        """Raw messages with their arrival time, next to the REST recordings (api.RECORD_DIR), so a session's
-        real stream latency and message order can be studied afterwards. Never breaks live timing."""
+        """Raw messages with their arrival time, into the recording of the session they're for (next to its REST
+        responses, f1hub/recordings.py), so its real stream latency and message order can be studied afterwards.
+        Messages for a session nobody is recording are dropped. Never breaks live timing."""
         rows, self._rec, self._rec_at = self._rec, [], time.time()
         if not rows or api.RECORD_DIR is None:
             return
-        try:
-            folder = api.RECORD_DIR / time.strftime("%Y-%m-%d", time.gmtime())
-            folder.mkdir(parents=True, exist_ok=True)
-            with gzip.open(folder / "stream.jsonl.gz", "at", encoding="utf-8") as f:
-                f.write("".join(json.dumps({"rx": rx, "topic": t, "row": r}) + "\n" for rx, t, r in rows))
-        except OSError:
-            pass
+        from .recordings import recording_for
+        by_session = {}
+        for rx, t, r in rows:
+            by_session.setdefault(r.get("session_key"), []).append((rx, t, r))
+        for sk, batch in by_session.items():
+            rec = recording_for(sk)
+            if rec is not None:
+                rec.stream(batch)
 
     def _publish(self, body):
         n = struct.unpack("!H", body[:2])[0]
@@ -169,12 +202,7 @@ class Stream:
             self._rec.append((rx, name, dict(row)))
         if not isinstance(row, dict):
             return
-        for k in ("date", "date_start"):     # some topics omit the UTC offset that REST includes
-            v = row.get(k)
-            if isinstance(v, str) and len(v) > 19 and not (v.endswith("Z") or "+" in v[19:] or "-" in v[19:]):
-                row[k] = v + "+00:00"
-            elif isinstance(v, str) and v.endswith("Z"):
-                row[k] = v[:-1] + "+00:00"
+        normalise_dates(row)
         with self.lock:
             b = self.buf[name]
             b.append(row)

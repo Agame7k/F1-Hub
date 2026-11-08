@@ -20,7 +20,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from .api import CACHE_DIR, APIError
+from .api import CACHE_DIR, APIError, write_atomic
 
 BASE = "https://www.fia.com"
 DOCS = BASE + "/documents/championships/fia-formula-one-world-championship-14"
@@ -80,7 +80,7 @@ def _fetch(url, ttl, binary=False):
         if blocked():
             raise FIABlocked(f"fia.com asked for fewer requests - trying again in {int(blocked() // 60) + 1} min") from None
         raise FIAError(f"Could not reach fia.com: {e}") from None
-    path.write_bytes(data)
+    write_atomic(path, data)
     return data if binary else data.decode("utf-8", "replace")
 
 
@@ -97,7 +97,7 @@ def pdf_text(url):
     except (subprocess.SubprocessError, OSError) as e:
         raise FIAError(f"Could not read the PDF: {e}") from None
     text = out.decode("utf-8", "replace")
-    txt.write_text(text)
+    write_atomic(txt, text)
     return text
 
 

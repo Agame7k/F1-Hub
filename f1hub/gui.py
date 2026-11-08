@@ -8,12 +8,14 @@ Modes
   live    - latest data, optionally shown N seconds late to match your TV/stream (delay)
   replay  - any session on a virtual clock: seek, play/pause, 1-10x (spoiler free)
 """
+import errno
 import json
+import logging
 import re
+import signal
 import zlib
 import threading
 import time
-import traceback
 import webbrowser
 from collections import deque
 from datetime import datetime, timedelta, timezone
@@ -24,6 +26,7 @@ from urllib.parse import parse_qs, urlparse
 from . import api, ff1
 from .championship import max_remaining, title_status
 
+log = logging.getLogger("f1hub.gui")
 PAGE = Path(__file__).with_name("dashboard.html")
 REPLAY_TICK = 1.0        # seconds of wall time between replay refreshes
 MAX_SPEED = 10
@@ -32,8 +35,15 @@ PUSH_DEBOUNCE = 0.08     # after a streamed timing message, wait this long for t
 PUSH_MIN_GAP = 0.25      # ...but never rebuild the frame more than 4 times a second
 HISTORY_STEP = 0.9       # the delay buffer keeps about one frame a second (the newest of each second)
 MAX_EVENT_STREAMS = 4    # browsers allow ~6 connections per site; leave room for the page's other requests
+SESSION_OVER_TICK = 300  # s between refreshes once a session is over (late corrections still show up)
 # streamed topics that change what's on screen right away; location / car_data ride along with the next frame
 URGENT_TOPICS = {"position", "intervals", "laps", "race_control", "pit", "stints", "overtakes", "team_radio", "weather"}
+
+
+def parse_time(v):
+    """datetime.fromisoformat, plus the trailing 'Z' browsers send (toISOString) - Python before 3.11 rejects it."""
+    v = v.strip()
+    return datetime.fromisoformat(v[:-1] + "+00:00" if v[-1:] in ("Z", "z") else v)
 
 
 def _fia_published(s):
@@ -69,7 +79,7 @@ def fia_query(path, q, snap):
         before = q.get("before")
         if before:          # spoiler mode while delayed / replaying: nothing published after the moment on screen
             try:
-                cut = datetime.fromisoformat(before.replace("Z", "+00:00"))
+                cut = parse_time(before)
             except ValueError:
                 raise BadRequest("before must be an ISO time") from None
         if path == "/api/fia/points":
@@ -223,9 +233,9 @@ def _when(v):
     except ValueError:
         pass
     try:
-        t = datetime.fromisoformat(v)
+        t = parse_time(v)
     except ValueError:
-        raise BadRequest("at must be seconds or an ISO time")
+        raise BadRequest("at must be seconds or an ISO time") from None
     if t.tzinfo is None:
         raise BadRequest("at needs a timezone")
     return t.isoformat()
@@ -330,6 +340,7 @@ class Feed:
         self.views = {}                     # client id -> (tab, last seen)
         self.stream = None                  # real-time MQTT (paid accounts)
         self.control_error = None
+        self.feed_error = None              # the live feed's last problem (logged once, until it's fixed)
         self.loading = None                 # "Loading replay..." while a replay session is fetched
         self.push_at = 0.0                  # when an unhandled streamed timing message arrived (0 = none)
         self.frame_no = 0                   # bumps whenever self.live changes; /api/events waits on it
@@ -368,7 +379,9 @@ class Feed:
     def control(self, **kw):
         with self.lock:
             if kw.get("mode") == "replay" or ("at" in kw and self.replay):
-                via = "FastF1 (the first time can take a minute or two)" if ff1.is_key(kw.get("session")) else "OpenF1"
+                from .recordings import is_key as recording_key
+                via = "FastF1 (the first time can take a minute or two)" if ff1.is_key(kw.get("session")) else \
+                    "the recording" if recording_key(kw.get("session")) else "OpenF1"
                 self.loading = {"text": f"Loading replay - fetching the session from {via}", "since": time.time()}
             self.requested += 1
             ticket = self.requested
@@ -447,8 +460,11 @@ class Feed:
     def _open_store(key, SessionStore):
         """A session to replay: OpenF1's, or FastF1's for older seasons and recordings - and FastF1's copy of an
         OpenF1 session while OpenF1 is locked (a live session elsewhere)."""
+        from . import recordings
         if ff1.is_key(key):
             return ff1.store(key)
+        if recordings.is_key(key):
+            return recordings.store(key)
         sess = api.get("sessions", ttl=60, session_key=key)
         if not sess:
             raise api.APIError(f"No session {key}")
@@ -458,7 +474,7 @@ class Feed:
         except api.LiveSessionLock:
             if not ff1.available():
                 raise
-            print(f"OpenF1 is locked - replaying session {key} through FastF1")
+            log.info("OpenF1 is locked - replaying session %s through FastF1", key)
             return ff1.store(ff1.key_for_openf1(sess[0]))
         return store
 
@@ -476,7 +492,7 @@ class Feed:
                             self._apply(kw)
                             self.control_error = None
                         except Exception as e:
-                            traceback.print_exc()
+                            log.exception("Applying %s failed", {k: v for k, v in kw.items() if k != "_wall"})
                             self.control_error = f"{type(e).__name__}: {e}"
                     if todo and self.settings["mode"] == "replay" and self.replay:
                         self._replay_tick()       # publish the replay frame before clearing "loading"
@@ -506,8 +522,10 @@ class Feed:
                     pushed = push_ready is not None and now >= push_ready and self.live_tracker.streaming()
                     if now >= next_live or todo or pushed:
                         tick = 1.0 if self.live_tracker.streaming() else 2.0   # REST calls are paced inside refresh()
-                        if self._session_over():
-                            tick = 30.0       # nothing new comes after a session: save the API for the home page
+                        over = self._session_over()
+                        if over:
+                            tick = SESSION_OVER_TICK    # nothing new comes after a session: save the API budget
+                        self._record_switch(over)
                         t0 = time.time()
                         if now >= next_live or pushed:
                             self.push_at = 0.0        # cleared first: messages during refresh() queue the next one
@@ -536,17 +554,45 @@ class Feed:
                     if self.push_at and self.live_tracker.streaming():
                         wake_at = min(wake_at, max(self.push_at + PUSH_DEBOUNCE, last_build + PUSH_MIN_GAP))
                     wait = max(0.02, wake_at - time.time())
+                    if self.session_key == "latest":
+                        wait = min(wait, 60)     # (and look for the next session every minute: _check_rollover)
             except api.LiveSessionLock as e:
+                self._feed_problem(str(e))
                 with self.lock:
                     self.live = {"error": str(e)}
                 wait = self.interval
-            except Exception as e:     # keep the feed alive through network blips
-                traceback.print_exc()
+            except api.APIError as e:  # network blips, offline and not cached: say so once, not every retry
+                self._feed_problem(str(e))
                 with self.lock:
                     self.live = dict(self.live, error=f"{type(e).__name__}: {e}")
                 wait = self.interval
+            except Exception as e:     # keep the feed alive whatever happens
+                if str(e) != self.feed_error:
+                    log.exception("Live timing refresh failed")
+                self.feed_error = str(e)
+                with self.lock:
+                    self.live = dict(self.live, error=f"{type(e).__name__}: {e}")
+                wait = self.interval
+            else:
+                if self.feed_error:
+                    log.info("Live timing is working again")
+                self.feed_error = None
             self.wake.wait(wait)
             self.wake.clear()
+
+    def _feed_problem(self, text):
+        if text != self.feed_error:
+            log.warning("Live timing: %s", text.splitlines()[0] if text else text)
+        self.feed_error = text
+
+    def _record_switch(self, over):
+        """Recording stops once the session is over (nothing more comes) - and resumes if it wasn't, after all."""
+        tr = self.live_tracker
+        rec = getattr(tr, "recording", None)
+        if rec is not None and rec.on == over:
+            rec.on = not over
+            log.info("%s %s: recording %s", tr.session.get("location"), tr.session.get("session_name"),
+                     "stopped (the session is over)" if over else "resumed")
 
     def _session_over(self, margin=timedelta(minutes=30)):
         """Past the scheduled end *and* gone quiet: red flags can run a session long past its schedule."""
@@ -567,7 +613,7 @@ class Feed:
         except Exception:
             return
         if latest and latest[0]["session_key"] != self.live_tracker.key:
-            print(f"New session: {latest[0].get('location')} {latest[0].get('session_name')} - switching to it")
+            log.info("New session: %s %s - switching to it", latest[0].get("location"), latest[0].get("session_name"))
             self.live_tracker = None
             with self.lock:
                 self.history.clear()        # the delay buffer belongs to the old session
@@ -677,6 +723,8 @@ class Feed:
     def sessions(self, year=None):
         """Sessions you can replay. With a year: every session OpenF1 has that season (practice, quali, sprint, race)."""
         now = datetime.now(timezone.utc)
+        if not year and self.season is None:     # the season is still loading: OpenF1's list for this year
+            year = now.year
         if year and int(year) < 2023:     # before OpenF1: F1's archive through FastF1
             out = []
             for x in ff1.schedule(int(year))["sessions"]:
@@ -718,8 +766,8 @@ class Feed:
             drivers, teams = s.apply_official_points(drivers, teams, by_number)
         done = {r.number for r in s.completed_rounds() if not hide_round or r.number < hide_round}
         flags = [r.has_sprint for r in s.rounds if r.number not in done and not r.cancelled]
-        dchamp, dcont = title_status(drivers, flags) if drivers else (None, [])
-        tchamp, tcont = title_status(teams, flags, constructor=True) if teams else (None, [])
+        dchamp, dcont = title_status(drivers, flags, rules=s.rules) if drivers else (None, [])
+        tchamp, tcont = title_status(teams, flags, constructor=True, rules=s.rules) if teams else (None, [])
         cal = []
         for r in s.rounds:
             win = next((x for x in s.result(r.race) if x.get("position") == 1), None) if r.number in done else None
@@ -740,7 +788,7 @@ class Feed:
             prog.append({"code": e.code, "colour": "#" + s.team_colour(e.team), "points": pts})
         return {
             "year": s.year, "completed": len(done), "rounds": len(s.rounds), "spoiler_hidden": bool(hide_round),
-            "points_left": max_remaining(flags), "rounds_left": len(flags), "remaining": flags,
+            "points_left": max_remaining(flags, rules=s.rules), "rounds_left": len(flags), "remaining": flags,
             "cancelled": [r.name for r in s.cancelled],
             "drivers": [{"code": e.code, "name": e.name, "team": e.team, "colour": "#" + s.team_colour(e.team),
                          "points": e.points, "wins": e.wins, "podiums": e.podiums, "poles": e.poles,
@@ -756,62 +804,414 @@ class Feed:
         }
 
 
-def serve(season, session_key="latest", interval=10, port=8765, open_browser=True):
-    feed = Feed(season, session_key, interval)
-    threading.Thread(target=feed.run, daemon=True).start()
-    season_cache = {"key": None, "data": None, "at": 0}
-    home_cache = {"data": None, "at": 0}
+# ------------------------------------------------------------------------------------------------ the season
+class SeasonNotReady(Exception):
+    """The season is still loading (or couldn't be loaded yet) -> HTTP 503 with what's going on."""
 
-    def refresh_season():
-        """Results land after each session: reload the season now and then (cached data makes it cheap)."""
-        from .season import Season
+
+class SeasonLoader:
+    """Loads the season in the background, and reloads it every RELOAD seconds (results land after each session;
+    the cache makes it cheap). The dashboard used to load every result before it started - and not start at all
+    when OpenF1 was locked (a live session, free account) or offline with one result not cached. Now it's up at
+    once, and whatever needs the season says it's loading."""
+    RELOAD = 30 * 60
+    RETRY = 60              # after a failure, or with results still missing
+    RETRY_LOCKED = 5 * 60   # OpenF1 locked: it stays that way until the session ends
+
+    def __init__(self, feed, year, on_change=None):
+        self.feed, self.year, self.on_change = feed, year, on_change
+        self.state = "loading"         # loading -> ready; failed (nothing loaded) / stale (an older copy in use)
+        self.error = None
+        self.progress = None
+        self.loaded_at = None
+        self.wake = threading.Event()
+
+    def start(self):
+        threading.Thread(target=self.run, daemon=True, name="season").start()
+        return self
+
+    def run(self):
         while True:
-            time.sleep(30 * 60)
+            self.wake.wait(self.load_once())
+            self.wake.clear()
+
+    def load_once(self):
+        """Load (or reload) the season. Returns how long to wait before the next go."""
+        from .season import Season
+        try:
+            fresh = Season(self.year).load(progress=self._progress)
+        except api.LiveSessionLock as e:
+            self._failed(e, "OpenF1 is locked while a session is live - the season loads when it ends")
+            return self.RETRY_LOCKED
+        except api.APIError as e:
+            self._failed(e, f"Couldn't load the {self.year} season")
+            return self.RETRY
+        except Exception as e:
+            log.exception("Loading the %s season failed", self.year)
+            self._failed(e)
+            return self.RETRY
+        finally:
+            self.progress = None
+        self.feed.season = fresh
+        self.state, self.error, self.loaded_at = "ready", None, time.time()
+        if self.on_change:
+            self.on_change()
+        return self.RETRY if fresh.missing else self.RELOAD
+
+    def _progress(self, msg):
+        self.progress = msg
+
+    def _failed(self, e, note=None):
+        error = str(e).strip().splitlines()[0][:300] if str(e).strip() else type(e).__name__
+        if note and error != self.error:          # once, not every retry
+            log.warning("%s: %s", note, error)
+        self.error = error
+        self.state = "stale" if self.feed.season else "failed"
+
+    def status(self):
+        s = self.feed.season
+        return {"state": self.state, "year": self.year, "error": self.error, "progress": self.progress,
+                "loaded_at": self.loaded_at, "missing": list(getattr(s, "missing", []) or [])}
+
+    def season(self):
+        """The loaded season, or SeasonNotReady saying why there isn't one yet."""
+        if self.feed.season is not None:
+            return self.feed.season
+        if self.state == "loading":
+            raise SeasonNotReady(f"Loading the {self.year} season" + (f" ({self.progress})" if self.progress else "") + "...")
+        raise SeasonNotReady(f"Couldn't load the {self.year} season yet ({self.error}) - trying again shortly.")
+
+
+# ------------------------------------------------------------------------------------------------ the API
+class NotFound(Exception):
+    pass
+
+
+class Reply:
+    """A response that isn't JSON: the page, a script, a download."""
+
+    def __init__(self, body, ctype, headers=()):
+        self.body, self.ctype, self.headers = body, ctype, list(headers)
+
+
+def allowed_hosts(port):
+    return {f"{h}:{port}" for h in ("localhost", "127.0.0.1", "[::1]")} | {"localhost", "127.0.0.1"}
+
+
+def trusted(headers, allowed):
+    """Only this machine's own dashboard may use the API: blocks other websites (cross-site requests) and
+    DNS-rebinding tricks that point a foreign hostname at localhost."""
+    if headers.get("Host", "") not in allowed:
+        return False
+    if headers.get("Sec-Fetch-Site", "same-origin") not in ("same-origin", "none"):
+        return False
+    origin = headers.get("Origin")
+    return not origin or origin.split("//", 1)[-1] in allowed
+
+
+WEB = Path(__file__).with_name("web")
+STATIC_TYPES = {".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8"}
+
+
+def env_stamp():
+    """When .openf1.env last changed (None if there's none): settings are read once, at startup."""
+    try:
+        return (api.PROJECT_DIR / ".openf1.env").stat().st_mtime
+    except OSError:
+        return None
+
+
+class App:
+    """Everything the dashboard's API answers, by path (ROUTES). The HTTP handler only checks where a request comes
+    from and turns results into responses, so each route can be called directly (tests)."""
+
+    def __init__(self, feed, port=8765, year=None):
+        self.feed = feed
+        self.port = port
+        self.allowed = allowed_hosts(port)
+        self.loader = SeasonLoader(feed, year or datetime.now(timezone.utc).year, on_change=self.season_changed)
+        self.season_cache = {"key": None, "data": None, "at": 0}
+        self.home_cache = {"data": None, "at": 0}
+        self.explore_cache = {}
+        self.seasons = {}
+        self.started = time.time()
+        self.env_at_start = env_stamp()
+        self.upstream_errors = {}
+
+    def upstream_problem(self, path, e):
+        """A request that failed because a data source did: logged once per path and message, not per request."""
+        text = str(e).splitlines()[0] if str(e) else type(e).__name__
+        if self.upstream_errors.get(path) != text:
+            self.upstream_errors[path] = text
+            log.warning("%s: %s", path, text)
+
+    def season_changed(self):
+        self.season_cache["at"] = self.home_cache["at"] = 0
+        self.explore_cache = {k: v for k, v in self.explore_cache.items() if k[:2] != ("stats", self.loader.year)}
+
+    def route(self, path, q):
+        fn = ROUTES.get(path)
+        if fn is not None:
+            return fn(self, q)
+        for prefix, fn in PREFIX_ROUTES:
+            if path.startswith(prefix):
+                return fn(self, q, path)
+        raise NotFound(path)
+
+    def tidy(self):
+        """At startup, off the request path: processes an earlier run left behind, and the recordings index."""
+        try:
+            for note in ff1.tidy_leftovers():
+                log.info("FastF1: %s", note)
+        except Exception:
+            log.exception("Checking for leftover FastF1 processes failed")
+        try:
+            from . import recordings
+            recordings.sessions()          # reading older recordings takes a few seconds the first time
+        except Exception:
+            log.exception("Reading the recordings failed")
+
+    # ---------------------------------------------------------------- the page
+    def page(self, q):
+        return Reply(PAGE.read_text(encoding="utf-8"), "text/html; charset=utf-8")
+
+    def static(self, q, path):
+        name = path[len("/static/"):]
+        ext = Path(name).suffix
+        if not re.fullmatch(r"[a-z0-9_-]+\.[a-z]+", name) or ext not in STATIC_TYPES or not (WEB / name).is_file():
+            raise NotFound(path)
+        return Reply((WEB / name).read_bytes(), STATIC_TYPES[ext])
+
+    # ---------------------------------------------------------------- live timing and replays
+    def live(self, q):
+        return self.feed.current()
+
+    def focus(self, q):
+        num = q.get("driver", "")
+        if num and not (num.isdigit() and 1 <= int(num) <= 99):
+            raise BadRequest("driver must be a car number")
+        want = int(num) if num else None
+        self.feed.control(focus=want)
+        for _ in range(40):       # give the feed thread up to ~4 s to fetch the telemetry
+            time.sleep(0.1)
+            f = self.feed.current().get("focus")
+            if (f or {}).get("number") == want or (want is None and not f):
+                break
+        return self.feed.current()
+
+    def control(self, q):
+        self.feed.wait_applied(self.feed.control(**clean_control(q)))   # reply with the frame *after* the change
+        return self.feed.current()
+
+    def view(self, q):
+        tab = q.get("tab", "")
+        cid = q.get("cid", "")[:16]
+        if not tab.isalpha() or len(tab) > 12:
+            raise BadRequest("bad tab")
+        self.feed.control(view=tab, cid=cid)
+        return {"ok": True}
+
+    def sessions(self, q):
+        return self.feed.sessions(_ff1_year(clean_year(q.get("year"), ff1.FIRST_YEAR)))
+
+    def radio(self, q, path):
+        """Team radio downloads. F1 hosts the clips on another site, so the browser can't save them directly
+        (cross-origin) - the server fetches them and hands them over as a file."""
+        from .radio import clip_name, fetch_clip, session_zip
+        if path == "/api/radio_file":
+            url = q.get("url", "")
             try:
-                fresh = Season(feed.season.year)
-                fresh.load(progress=lambda *a, **k: None)
-                feed.season = fresh
-                season_cache["at"] = home_cache["at"] = 0
-            except Exception:
-                traceback.print_exc()
-    threading.Thread(target=refresh_season, daemon=True, name="season-refresh").start()
+                data = fetch_clip(url)      # refuses anything that isn't an F1 team-radio clip
+            except ValueError as e:
+                raise BadRequest(str(e))
+            name, ctype = clip_name(url, q.get("lap")), "audio/mpeg"
+        else:
+            data, name = session_zip(self.feed.current(), q.get("driver"))
+            ctype = "application/zip"
+        safe = "".join(c for c in name if c.isalnum() or c in "._-") or "radio"
+        return Reply(data, ctype, [("Content-Disposition", f'attachment; filename="{safe}"')])
 
-    explore_cache = {}
-    seasons = {}
+    # ---------------------------------------------------------------- explore
+    def lab_trace(self, q):
+        from .analysis import lab_trace
+        key, num, lap, before = clean_lap_query(q, self.feed.current().get("session_key"))
+        src = q.get("src", "auto")
+        if src not in ("auto", "openf1", "fastf1"):
+            raise BadRequest("src must be auto, openf1 or fastf1")
+        try:
+            tr = lab_trace(key, num, lap, src, before)
+        except ff1.FF1Error as e:
+            tr = {"error": f"FastF1: {e}"}
+        return tr or {"error": "no completed lap yet"}
 
-    def stats(year):
+    def lab_laps(self, q):
+        from .analysis import lab_laps
+        return lab_laps(clean_key(q.get("session")))
+
+    def analysis(self, q):
+        from .analysis import session_analysis
+        return session_analysis(clean_key(q.get("session")), clean_before(q.get("before")))
+
+    def circuit(self, q):
+        from .analysis import circuit_preview
+        mk = q.get("meeting")
+        if mk and not mk.isdigit():
+            raise BadRequest("meeting must be a meeting key")
+        key = ("circuit", mk)
+        hit = self.explore_cache.get(key)
+        if not hit or time.time() - hit[0] > 1800:
+            hit = self.explore_cache[key] = (time.time(), circuit_preview(int(mk) if mk else None, clean_year(q.get("year"))))
+        return hit[1] or {"error": "no upcoming meeting found"}
+
+    def circuit_history(self, q):
+        from .analysis import circuit_history
+        if not ff1.available():
+            return {"history": [], "error": "FastF1 isn't installed"}
+        year = clean_year(q.get("year")) or datetime.now().year
+        return {"history": circuit_history(q.get("name", "")[:80], q.get("location", "")[:80], year)}
+
+    def stats(self, q):
         """Season stats (Explore tab): OpenF1 seasons from their results, 2018-2022 from the Ergast archive via FastF1.
         This season respects spoiler mode: nothing from the meeting you're replaying or watching delayed."""
         from .analysis import _norm_ergast, _norm_openf1, season_stats
-        hide = feed.hidden_meeting()
+        year = _ff1_year(clean_year(q.get("year"), ff1.FIRST_YEAR)) or self.loader.year
+        hide = self.feed.hidden_meeting()
         key = ("stats", year, hide)
-        hit = explore_cache.get(key)
-        if hit and time.time() - hit[0] < (1800 if year == feed.season.year else 86400):
+        hit = self.explore_cache.get(key)
+        if hit and time.time() - hit[0] < (1800 if year == self.loader.year else 86400):
             return hit[1]
         if year < 2023:
             data = ff1._disk_cache(f"season-{year}.json", None, lambda: ff1.QUICK.call("season_results", timeout=600, year=year))
             out = season_stats(_norm_ergast(data), year)
         else:
-            if year == feed.season.year:
-                season = feed.season
+            if year == self.loader.year:
+                season = self.loader.season()
             else:
-                if year not in seasons:
+                if year not in self.seasons:
                     from .season import Season
-                    seasons[year] = Season(year).load()
-                season = seasons[year]
+                    self.seasons[year] = Season(year).load()
+                season = self.seasons[year]
             upto = None
             if hide:
                 r = next((r.number for r in season.rounds if r.meeting_key == hide), None)
                 upto = r - 1 if r else None
             official = None
-            if season.official and upto is None:      # official totals: fastest-lap points, penalties
+            if season.official and upto is None:      # official totals: they include any penalties
                 official = {season.driver(n).code: p for n, p in season.official["drivers"].items()}
             out = season_stats(_norm_openf1(season, upto), year, official)
             out["spoiler_hidden"] = bool(upto is not None)
-        explore_cache[key] = (time.time(), out)
+        self.explore_cache[key] = (time.time(), out)
         return out
 
-    allowed_hosts = {f"{h}:{port}" for h in ("localhost", "127.0.0.1", "[::1]")} | {"localhost", "127.0.0.1"}
+    # ---------------------------------------------------------------- home and season
+    def home(self, q):
+        hc = self.home_cache
+        if time.time() - hc["at"] > 60 or not hc["data"]:
+            from .home import home
+            hc.update(data=home(self.feed.season, year=self.loader.year), at=time.time())
+        data = dict(hc["data"], season_status=self.loader.status())
+        hide = self.feed.hidden_meeting()
+        if hide and data.get("last_race") and data["last_race"].get("meeting_key") == hide:
+            data = dict(data, last_race=dict(data["last_race"], results=None, hidden=True), last_session=None)
+        return data
+
+    def season(self, q):
+        self.loader.season()
+        key = self.feed.hidden_meeting()
+        sc = self.season_cache
+        if sc["key"] != key or time.time() - sc["at"] > 60 or not sc["data"]:
+            sc.update(key=key, data=self.feed.season_data(), at=time.time())
+        return dict(sc["data"], season_status=self.loader.status())
+
+    def fia(self, q, path):
+        return fia_query(path, q, self.feed.current())
+
+    # ---------------------------------------------------------------- FastF1 and recordings
+    def ff1_status(self, q):
+        return ff1.status()
+
+    def ff1_login(self, q):
+        action = q.get("action")
+        if action == "start":
+            return ff1.LOGIN.start()
+        if action == "cancel":
+            return ff1.LOGIN.cancel()
+        if action == "signout":
+            return ff1.sign_out()
+        if action == "retry":
+            return ff1.retry_password()
+        if action == "status":
+            return {"sign_in": ff1.LOGIN.status(), "auth": ff1.auth()}
+        raise BadRequest("action must be start, cancel, signout, retry or status")
+
+    def ff1_recordings(self, q):
+        return {"recordings": ff1.recordings(), "recorder": ff1.RECORDER.status()}
+
+    def ff1_record(self, q):
+        action = q.get("action")
+        if action == "start":
+            tr = self.feed.live_tracker
+            sess = tr.session if tr else None
+            if sess is None:
+                try:
+                    sess = (api.get("sessions", ttl=60, session_key="latest") or [None])[0]
+                except (api.APIError, api.LiveSessionLock):
+                    sess = None
+            return ff1.RECORDER.start(sess)
+        if action == "stop":
+            return ff1.RECORDER.stop()
+        raise BadRequest("action must be start or stop")
+
+    def recordings(self, q):
+        """Live OpenF1 data recorded per session (f1hub/recordings.py), to replay."""
+        from . import recordings
+        out = []
+        for e in recordings.sessions():
+            s = e["session"] or {}
+            out.append({"key": e["key"], "session_key": e["session_key"], "name": s.get("session_name"),
+                        "location": s.get("location"), "year": s.get("year"), "start": s.get("date_start"),
+                        "bytes": e["bytes"], "first": e["first"], "last": e["last"], "layout": e["layout"],
+                        "endpoints": e["endpoints"], "replaying": bool(self.feed.replay) and
+                        str(self.feed.replay["store"].key) == str(e["key"])})
+        return {"recordings": out, "recording": api.RECORD_DIR is not None, "folder": str(Path(api.RECORDINGS) / "openf1")}
+
+    def latency(self, q):
+        from . import recordings
+        key = clean_key(q.get("session"))
+        if not recordings.is_key(key):
+            key = recordings.key_for(key)
+        return recordings.latency(key)
+
+    # ---------------------------------------------------------------- health
+    def health(self, q):
+        """A quick "is it up, and is it working" for scripts and `doctor` (the page uses /api/diagnostics)."""
+        st = self.feed.current()
+        return {"ok": "rows" in st, "error": st.get("error"), "mode": st.get("mode"),
+                "stream": (st.get("feed") or {}).get("stream"), "season": self.loader.status(),
+                "restart_needed": env_stamp() != self.env_at_start, "uptime": round(time.time() - self.started)}
+
+    def diagnostics(self, q):
+        from .doctor import dashboard_checks
+        return dashboard_checks(self)
+
+
+ROUTES = {
+    "/": App.page, "/index.html": App.page,
+    "/api/live": App.live, "/api/focus": App.focus, "/api/control": App.control, "/api/view": App.view,
+    "/api/sessions": App.sessions,
+    "/api/lap": App.lab_trace, "/api/lab/trace": App.lab_trace, "/api/lab/laps": App.lab_laps,
+    "/api/analysis": App.analysis, "/api/circuit": App.circuit, "/api/circuit/history": App.circuit_history,
+    "/api/stats": App.stats, "/api/home": App.home, "/api/season": App.season,
+    "/api/ff1/status": App.ff1_status, "/api/ff1/login": App.ff1_login,
+    "/api/ff1/recordings": App.ff1_recordings, "/api/ff1/record": App.ff1_record,
+    "/api/recordings": App.recordings, "/api/recordings/latency": App.latency,
+    "/api/health": App.health, "/api/diagnostics": App.diagnostics,
+}
+PREFIX_ROUTES = [("/api/fia/", App.fia), ("/static/", App.static), ("/api/radio_", App.radio)]
+
+
+def make_handler(app):
+    feed = app.feed
 
     class Handler(BaseHTTPRequestHandler):
         def _headers(self, code, ctype, length, extra=()):
@@ -837,153 +1237,34 @@ def serve(season, session_key="latest", interval=10, port=8765, open_browser=Tru
         def _json(self, obj, code=200):
             self._send(json.dumps(obj), code=code)
 
-        def _trusted(self):
-            """Only this machine's own dashboard may use the API: blocks other websites (cross-site requests)
-            and DNS-rebinding tricks that point a foreign hostname at localhost."""
-            if self.headers.get("Host", "") not in allowed_hosts:
-                return False
-            if self.headers.get("Sec-Fetch-Site", "same-origin") not in ("same-origin", "none"):
-                return False
-            origin = self.headers.get("Origin")
-            return not origin or origin.split("//", 1)[-1] in allowed_hosts
-
         def do_GET(self):
             url = urlparse(self.path)
             q = {k: v[0] for k, v in parse_qs(url.query).items()}
-            path = url.path
-            if not self._trusted():
+            if not trusted(self.headers, app.allowed):
                 return self._json({"error": "requests from other sites are not allowed"}, 403)
+            if url.path == "/api/events":
+                return self._events()
             try:
-                if path in ("/", "/index.html"):
-                    self._send(PAGE.read_text(), "text/html; charset=utf-8")
-                elif path == "/api/live":
-                    self._json(feed.current())
-                elif path == "/api/events":
-                    self._events()
-                elif path == "/api/focus":
-                    num = q.get("driver", "")
-                    if num and not (num.isdigit() and 1 <= int(num) <= 99):
-                        raise BadRequest("driver must be a car number")
-                    want = int(num) if num else None
-                    feed.control(focus=want)
-                    for _ in range(40):       # give the feed thread up to ~4 s to fetch the telemetry
-                        time.sleep(0.1)
-                        f = feed.current().get("focus")
-                        if (f or {}).get("number") == want or (want is None and not f):
-                            break
-                    self._json(feed.current())
-                elif path == "/api/control":
-                    feed.wait_applied(feed.control(**clean_control(q)))   # reply with the frame *after* the change
-                    self._json(feed.current())
-                elif path == "/api/view":
-                    tab = q.get("tab", "")
-                    cid = q.get("cid", "")[:16]
-                    if not tab.isalpha() or len(tab) > 12:
-                        raise BadRequest("bad tab")
-                    feed.control(view=tab, cid=cid)
-                    self._json({"ok": True})
-                elif path in ("/api/lap", "/api/lab/trace"):
-                    from .analysis import lab_trace
-                    key, num, lap, before = clean_lap_query(q, feed.current().get("session_key"))
-                    src = q.get("src", "auto")
-                    if src not in ("auto", "openf1", "fastf1"):
-                        raise BadRequest("src must be auto, openf1 or fastf1")
-                    try:
-                        tr = lab_trace(key, num, lap, src, before)
-                    except ff1.FF1Error as e:
-                        tr = {"error": f"FastF1: {e}"}
-                    self._json(tr or {"error": "no completed lap yet"})
-                elif path == "/api/lab/laps":
-                    from .analysis import lab_laps
-                    self._json(lab_laps(clean_key(q.get("session"))))
-                elif path == "/api/analysis":
-                    from .analysis import session_analysis
-                    self._json(session_analysis(clean_key(q.get("session")), clean_before(q.get("before"))))
-                elif path == "/api/circuit":
-                    from .analysis import circuit_preview
-                    mk = q.get("meeting")
-                    if mk and not mk.isdigit():
-                        raise BadRequest("meeting must be a meeting key")
-                    key = ("circuit", mk)
-                    hit = explore_cache.get(key)
-                    if not hit or time.time() - hit[0] > 1800:
-                        hit = explore_cache[key] = (time.time(), circuit_preview(int(mk) if mk else None, clean_year(q.get("year"))))
-                    self._json(hit[1] or {"error": "no upcoming meeting found"})
-                elif path == "/api/circuit/history":
-                    from .analysis import circuit_history
-                    if not ff1.available():
-                        self._json({"history": [], "error": "FastF1 isn't installed"})
-                    else:
-                        year = clean_year(q.get("year")) or datetime.now().year
-                        self._json({"history": circuit_history(q.get("name", "")[:80], q.get("location", "")[:80], year)})
-                elif path == "/api/stats":
-                    self._json(stats(_ff1_year(clean_year(q.get("year"), ff1.FIRST_YEAR)) or feed.season.year))
-                elif path == "/api/ff1/status":
-                    self._json(ff1.status())
-                elif path == "/api/ff1/login":
-                    action = q.get("action")
-                    if action == "start":
-                        self._json(ff1.LOGIN.start())
-                    elif action == "cancel":
-                        self._json(ff1.LOGIN.cancel())
-                    elif action == "signout":
-                        self._json(ff1.sign_out())
-                    elif action == "status":
-                        self._json({"sign_in": ff1.LOGIN.status(), "auth": ff1.auth()})
-                    else:
-                        raise BadRequest("action must be start, cancel, signout or status")
-                elif path == "/api/ff1/recordings":
-                    self._json({"recordings": ff1.recordings(), "recorder": ff1.RECORDER.status()})
-                elif path == "/api/ff1/record":
-                    action = q.get("action")
-                    if action == "start":
-                        tr = feed.live_tracker
-                        sess = tr.session if tr else None
-                        if sess is None:
-                            try:
-                                sess = (api.get("sessions", ttl=60, session_key="latest") or [None])[0]
-                            except api.APIError:
-                                sess = None
-                        self._json(ff1.RECORDER.start(sess))
-                    elif action == "stop":
-                        self._json(ff1.RECORDER.stop())
-                    else:
-                        raise BadRequest("action must be start or stop")
-                elif path in ("/api/radio_file", "/api/radio_zip"):
-                    self._radio(path, q)
-                elif path == "/api/sessions":
-                    self._json(feed.sessions(_ff1_year(clean_year(q.get("year"), ff1.FIRST_YEAR))))
-                elif path == "/api/home":
-                    if time.time() - home_cache["at"] > 60 or not home_cache["data"]:
-                        from .home import home
-                        home_cache.update(data=home(feed.season), at=time.time())
-                    data = home_cache["data"]
-                    hide = feed.hidden_meeting()
-                    if hide and data.get("last_race") and data["last_race"].get("meeting_key") == hide:
-                        data = dict(data, last_race=dict(data["last_race"], results=None, hidden=True), last_session=None)
-                    self._json(data)
-                elif path == "/api/season":
-                    key = feed.hidden_meeting()
-                    if season_cache["key"] != key or time.time() - season_cache["at"] > 60 or not season_cache["data"]:
-                        season_cache.update(key=key, data=feed.season_data(), at=time.time())
-                    self._json(season_cache["data"])
-                elif path.startswith("/api/fia/"):
-                    self._json(fia_query(path, q, feed.current()))
-                elif path == "/api/health":
-                    st = feed.current()
-                    self._json({"ok": "rows" in st, "error": st.get("error"), "mode": st.get("mode"),
-                                "stream": (st.get("feed") or {}).get("stream"), "stt": st.get("stt"),
-                                "fastf1": ff1.status()})
+                out = app.route(url.path, q)
+                if isinstance(out, Reply):
+                    self._send(out.body, out.ctype, extra=out.headers)
                 else:
-                    self._json({"error": "not found"}, 404)
+                    self._json(out)
+            except NotFound:
+                self._json({"error": "not found"}, 404)
             except BadRequest as e:
                 self._json({"error": str(e)}, 400)
+            except SeasonNotReady as e:
+                self._json({"error": str(e), "loading": True, "season_status": app.loader.status()}, 503)
             except api.LiveSessionLock as e:
                 self._json({"error": str(e), "locked": True}, 503)
+            except api.APIError as e:       # OpenF1 (or F1, the FIA) unreachable, or offline and not cached
+                app.upstream_problem(url.path, e)
+                self._json({"error": str(e), "upstream": True}, 502)
             except (BrokenPipeError, ConnectionResetError):
                 pass
             except Exception as e:
-                traceback.print_exc()
+                log.exception("%s failed", url.path)
                 self._json({"error": f"{type(e).__name__}: {e}"}, 500)
 
         def log_message(self, *args):
@@ -1024,31 +1305,48 @@ def serve(season, session_key="latest", interval=10, port=8765, open_browser=Tru
                 with feed.frame_cv:
                     feed.event_streams -= 1
 
-        def _radio(self, path, q):
-            """Team radio downloads. F1 hosts the clips on another site, so the browser can't save them
-            directly (cross-origin) - the server fetches them and hands them over as a file."""
-            from .radio import fetch_clip, clip_name, session_zip
-            if path == "/api/radio_file":
-                url = q.get("url", "")
-                try:
-                    data = fetch_clip(url)      # refuses anything that isn't an F1 team-radio clip
-                except ValueError as e:
-                    raise BadRequest(str(e))
-                name = clip_name(url, q.get("lap"))
-                ctype = "audio/mpeg"
-            else:
-                snap = feed.current()
-                data, name = session_zip(snap, q.get("driver"))
-                ctype = "application/zip"
-            safe = "".join(c for c in name if c.isalnum() or c in "._-") or "radio"
-            self._send(data, ctype, extra=[("Content-Disposition", f'attachment; filename="{safe}"')])
+    return Handler
 
-    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+
+def serve(year=None, session_key="latest", interval=10, port=8765, open_browser=True):
+    """Run the dashboard. Up at once: the season loads in the background (SeasonLoader)."""
+    from . import logs
+    logs.setup()
+    server = ThreadingHTTPServer(("127.0.0.1", port), BaseHTTPRequestHandler, bind_and_activate=False)
+    try:                    # the port first: a second copy shouldn't get as far as connecting to OpenF1
+        server.server_bind()
+        server.server_activate()
+    except OSError as e:
+        server.server_close()
+        if e.errno == errno.EADDRINUSE:
+            raise SystemExit(f"Port {port} is already in use - is F1 Hub running already? Open http://localhost:{port}"
+                             f" (or start this one with --port {port + 1}).") from None
+        raise
+    feed = Feed(None, session_key, interval)
+    app = App(feed, port, year)
+    server.RequestHandlerClass = make_handler(app)
+    app.loader.start()
+    threading.Thread(target=feed.run, daemon=True, name="feed").start()
+    threading.Thread(target=app.tidy, daemon=True, name="tidy").start()
     url = f"http://localhost:{port}"
-    print(f"F1 Hub dashboard running at {url}  (Ctrl+C to stop)")
+    log.info("F1 Hub dashboard running at %s  (Ctrl+C to stop)", url)
+    log.info("Log: %s", logs.log_file())
     if open_browser:
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+
+    def stop(*_):
+        raise KeyboardInterrupt
+    for name in ("SIGTERM", "SIGHUP"):       # a closed terminal or `kill`: shut down the same way as Ctrl+C
+        if hasattr(signal, name):
+            signal.signal(getattr(signal, name), stop)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
+    finally:
+        server.server_close()
+        for note in ff1.shutdown():
+            log.info(note)
+        if feed.stream:
+            feed.stream.stop()          # (writes out the last streamed messages to the recording)
+        log.info("F1 Hub stopped.")

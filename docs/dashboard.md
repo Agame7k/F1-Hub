@@ -11,6 +11,8 @@ The full guide to the browser dashboard (`python3 -m f1hub gui`). For setup, see
 - [Home page](#home-page)
 - [Explore tab](#explore-tab)
 - [FastF1 and recording the live-timing feed](#fastf1-and-recording-the-live-timing-feed)
+- [Live OpenF1 recordings](#live-openf1-recordings)
+- [Status and troubleshooting](#status-and-troubleshooting)
 - [Keyboard shortcuts](#keyboard-shortcuts)
 - [Server safety and resilience](#server-safety-and-resilience)
 
@@ -19,7 +21,7 @@ The full guide to the browser dashboard (`python3 -m f1hub gui`). For setup, see
 | Tab | What it shows (all from OpenF1) |
 |---|---|
 | **Live timing** | Race clock and time left to the 3-hour limit, track status, lap X of Y, driver names, last-lap S1/S2/S3 in F1 colours (purple = session best, green = personal best, yellow = slower), live championship points, gaps and intervals, tyre and its age, pits, last and best laps (fastest in purple), places gained since the grid, overtakes, mini track map, weather, live title fight |
-| **Race control** | Every message tagged and filterable (flags / safety car / stewards / session). Live marshal-sector flag board, SC/VSC/red-flag timeline, stewards' desk, and a per-driver record of deleted laps, black-and-white flags, investigations, penalties and blue flags |
+| **Race control** | Every message tagged and filterable (flags / safety car / stewards / session). Live marshal-sector flag board, SC/VSC/red-flag timeline, stewards' desk, and a per-driver record of deleted laps, black-and-white flags, black flags, investigations, penalties and blue flags |
 | **Red flag panel** | How long the race has been suspended, a countdown to the announced restart, the official restart order, standing or SC start, pit exit status, and a **RACE RESUMED** banner with the stoppage length. Also catches "will not be resumed" and shows the reduced-points title outcome |
 | **Track map** | Official circuit outline (MultiViewer data linked from OpenF1) at its real rotation, with corner numbers. **Marshal sectors are coloured by live flags**: yellow, flashing double yellow, green when just cleared, amber under SC/VSC, all red on a red flag. Cars sit on the track from live location data, with labels that don't overlap. The ghost button shows a ghost of the session's fastest lap against your selected driver's current lap |
 | **Insights** | Battles within 1 s, a "pit now" rejoin predictor using the circuit's published pit loss (green / SC / VSC), race pace over the last 5 clean laps, a lap chart (position every lap), theoretical best laps (best S1+S2+S3), speed traps (trap / I1 / I2), weather trend |
@@ -122,7 +124,7 @@ The server follows the "latest" session by itself: when FP1 starts it switches o
 | **Telemetry lab** | Any two laps of any session (not just the one on screen): speed, the gap along the lap, throttle, brake, gear and (FastF1) RPM against distance, plus a map of who's quicker in each of 25 mini-sectors |
 | **Season stats** | Any season from 2018 (2018-2022 need FastF1): points, wins, podiums, poles, average qualifying and finishing positions, places gained from the grid, Q3 appearances, points per round, last-5 form, points progression for drivers and constructors, and team-mate head-to-heads in qualifying and races. Click a driver for their season card |
 | **Circuit preview** | The next round (or any round this season): the track with corner numbers, pit-stop loss (green / SC / VSC), and every past race there with podium, where the winner started, pole, fastest lap, the winner's tyres, safety cars, overtakes and track temperature. Also how many stops cars made and the most-used tyre orders. With FastF1, winners back to 2018 too, each one a click from a replay |
-| **FastF1 & recordings** | FastF1's status, the live-timing recorder and your recordings |
+| **FastF1 & recordings** | FastF1's status and the F1 TV sign-in, the live-timing recorder and its recordings, and your [live OpenF1 recordings](#live-openf1-recordings) with how late their data arrived |
 
 In spoiler mode, a session from the last few days (and this season's stats, while the latest race is still hidden) stays covered until you reveal it. That's the same switch as on Home, so revealing in one place reveals in both. While you're replaying a session, its analysis and lab only use what had happened by the replay clock.
 
@@ -137,8 +139,10 @@ What it adds:
 - **Recording the live-timing feed** (Explore > FastF1 > *Start recording now*). This saves everything F1's feed sends (timing, positions, car telemetry, race control, weather) to `recordings/fastf1/`. FastF1 can't process it in real time, so live timing stays on OpenF1; recordings are for playing back afterwards, or part-way through to see what has been recorded so far. Each recording appears in the list with *Play back* (a full replay) and *Analysis* buttons. It stops by itself 30 minutes after the feed goes quiet.
 
 **Signing in to F1 TV.** There are two ways:
-- **In the browser:** Explore > FastF1 > *Sign in to F1 TV* opens F1's sign-in page through FastF1 (f1login.fastf1.dev). It needs FastF1's browser add-on, which that page links to. The card updates when you're signed in. FastF1 stores the token and reuses it until it expires (*Sign out* removes it), so you only do this occasionally. No restart is needed.
-- **With a password:** put `F1_USERNAME` and `F1_PASSWORD` in `.openf1.env` (see [Configuration](../README.md#configuration)) and restart F1 Hub.
+- **In the browser:** Explore > FastF1 > *Sign in to F1 TV* opens F1's sign-in page through FastF1 (f1login.fastf1.dev). It needs FastF1's browser add-on, which that page links to. While it waits, the card shows how long is left before the sign-in gives up, and it updates when you're signed in. FastF1 stores the token and reuses it until it expires (*Sign out* removes it), so you only do this occasionally. No restart is needed.
+- **With a password:** put `F1_USERNAME` and `F1_PASSWORD` in `.openf1.env` (see [Configuration](../README.md#configuration)) and restart F1 Hub. FastF1 signs in with them the first time it needs to.
+
+If F1 turns the password down, the card says so, with F1's reason. FastF1 doesn't send a rejected password again by itself: every load would otherwise repeat the rejected sign-in, which slows loading and can get the account locked. Check the details on formula1.com, then click *Try the password again* (after changing `.openf1.env`, restart F1 Hub instead), or sign in in the browser.
 
 F1 Hub never starts a sign-in in the background. Without a login, FastF1 and the recorder carry on with F1's free data.
 
@@ -147,6 +151,30 @@ With an **F1 TV Pro login**:
 - FastF1 can read F1's archive for **2023 onwards**. Without a login it only serves 2022 and earlier, so the OpenF1-locked fallback and the FastF1 telemetry source for recent sessions need it.
 
 FastF1's downloads are cached in `.f1cache/fastf1/`. A race with telemetry is about 100 MB the first time (a minute or two), then loads in seconds. Session keys for FastF1 sessions look like `202122050` (year, round, session number, recording number).
+
+## Live OpenF1 recordings
+
+During a live session, F1 Hub saves every OpenF1 response and stream message it receives to `recordings/openf1/<session>/`, and stops by itself once the session is over. Set `F1HUB_RECORD=0` to turn this off; recordings already saved still play back.
+
+Explore > FastF1 & recordings lists them under *Live OpenF1 recordings*:
+- **Play back** opens the session as a full replay, from the recorded data.
+- **Delays** shows how late each kind of data reached F1 Hub: the median and how long 90% took, from when something happened (its own timestamp) to when it arrived, for polling and for the stream separately. Polling includes the wait for the next request. Data that came in a first answer (F1 Hub had just started, or was catching up after a gap) isn't counted, because when it was published isn't known.
+
+## Status and troubleshooting
+
+The **Status** button in the header (or `D`) runs a setup check. Its dot is green when everything is fine, amber when something needs a look, and red when something is broken. The panel lists each check with what to do about it:
+- the settings in `.openf1.env` (names only, never values): unknown names, half-set pairs, and whether other users on the machine can read the file
+- the OpenF1 login: paid, free, or turned down (F1 Hub then carries on with free access and tries the login again every 5 minutes)
+- the season data, the live feed and the real-time stream
+- recording, FastF1 and the F1 TV sign-in
+- the tools for radio transcripts and FIA documents, free disk space, and sign-in windows left over from an earlier run
+- the latest warnings and errors, and where the log file is (`.f1cache/logs/f1hub.log`)
+
+*Check again* reruns it; it also refreshes by itself every minute. When `.openf1.env` changes while the dashboard is running, a banner says that a restart is needed to use the new settings.
+
+`python3 -m f1hub doctor` runs the same checks in the terminal, with or without the dashboard running. It also logs in to OpenF1, tries the stream and checks the dashboard's port (`--no-network` skips contacting OpenF1).
+
+While the season loads in the background (the server starts straight away), Championship and Calendar say so; if loading fails, they say why and it's tried again shortly. Results that OpenF1 hasn't published yet are listed and fetched again later.
 
 ## Keyboard shortcuts
 
@@ -158,6 +186,7 @@ Press `?` on the dashboard for the list.
 | `1`–`0` | Switch tabs |
 | `[` / `]` | Previous / next tab |
 | `S` | Settings |
+| `D` | Status (setup check) |
 | `M` | Mini tower |
 | `Space` | Play/pause a replay |
 | Left / Right arrow | Seek 10 s (`Shift` for 1 min) |
@@ -170,6 +199,8 @@ Your tab is remembered and is in the URL (`#map`, `#radio`, …), so you can boo
 ## Server safety and resilience
 
 - The local server only answers its own page: other websites can't change your settings or read the data (cross-site requests and foreign hostnames get a 403).
-- Bad parameters get a clear 400 instead of a crash, and `/api/health` reports what is connected.
+- Bad parameters get a clear 400 instead of a crash, and `/api/health` reports what is connected and whether changed settings need a restart.
+- When OpenF1 or the network fails, requests answer with the reason (a 502) instead of a server error, and the log records it once, not on every retry. Live timing keeps trying and logs when it's working again.
+- If the port is already taken (F1 Hub is probably running already), it says so and suggests `--port`.
 - Season standings reload every 30 minutes.
 - If one panel ever fails to draw, the rest of the dashboard keeps working and a small note says which part failed. If the server stops, the page shows a reconnect banner and picks up again when it's back.

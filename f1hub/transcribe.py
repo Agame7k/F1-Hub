@@ -13,6 +13,7 @@ import time
 from collections import deque
 from pathlib import Path
 
+from .api import write_atomic
 from .radio import CACHE, fetch_clip
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -53,7 +54,7 @@ class Transcriber:
             if f.exists():
                 try:
                     hit = self.texts[url] = json.loads(f.read_text())
-                except ValueError:
+                except (OSError, ValueError):
                     hit = None
         return hit
 
@@ -118,7 +119,7 @@ class Transcriber:
                     res.pop("id", None)
                     self.texts[url] = res
                     if "error" not in res:
-                        (CACHE / (_key(url) + ".json")).write_text(json.dumps(res))
+                        write_atomic(CACHE / (_key(url) + ".json"), json.dumps(res))
                     self.done += 1
                     self.error = None
                 except Exception as e:

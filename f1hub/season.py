@@ -1,12 +1,14 @@
 """Builds a season from real OpenF1 data: calendar, results, standings."""
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from . import api
 from .championship import Entry, sort_standings, title_status
-from .rules import RULES
+from .rules import FASTEST_LAP_TOP, rules_for
 
 HOUR = 3600
+log = logging.getLogger("f1hub.season")
 
 
 def _dt(s):
@@ -63,15 +65,56 @@ def _ttl_for(session):
     return api.FOREVER if age > 4 * 24 * HOUR else 15 * 60
 
 
+def classified(row):
+    """A result row's finishing position, or None if it doesn't score (DSQ, DNS, not classified)."""
+    pos = row.get("position")
+    return pos if isinstance(pos, int) and not row.get("dsq") and not row.get("dns") else None
+
+
+def fastest_lap_point(rows, session, rules):
+    """Number of the driver who scored the fastest-lap point in this race, or None.
+
+    OpenF1's points field includes the bonus, so it's read from there: the top-10 finisher with one point more
+    than the table gives. A few races have broken points (2023 Saudi Arabia: 0 for P2; 2023 USA: 0 for P2-P10);
+    for those the fastest lap is looked up in the race's laps instead."""
+    table = rules["gp_points"]
+    holder, sound = None, True
+    for r in rows:
+        pos = classified(r)
+        due = table[pos - 1] if pos and pos <= len(table) else 0
+        got = r.get("points")
+        if got is None:
+            sound = False
+        elif pos and pos <= FASTEST_LAP_TOP and got == due + 1:
+            holder = r["driver_number"]
+        elif got != due:
+            sound = False
+    if sound:
+        return holder
+    try:
+        laps = [l for l in api.get("laps", ttl=_ttl_for(session), session_key=session["session_key"])
+                if l.get("lap_duration") and not l.get("deleted")]
+    except (api.APIError, api.LiveSessionLock):
+        return None
+    if not laps:
+        return None
+    best = min(laps, key=lambda l: l["lap_duration"])["driver_number"]
+    pos = next((classified(r) for r in rows if r["driver_number"] == best), None)
+    return best if pos and pos <= FASTEST_LAP_TOP else None
+
+
 class Season:
     def __init__(self, year):
         self.year = year
+        self.rules = rules_for(year)
+        self.fastest_lap = {}   # race session_key -> number of the driver who scored the fastest-lap point
         self.rounds = []
         self.cancelled = []     # cancelled meetings (not numbered, like the official calendar)
         self.results = {}       # session_key -> list of result rows
         self.drivers = {}       # number -> DriverInfo (latest known)
         self.race_drivers = {}  # session_key -> {number: DriverInfo}  (team at the time)
         self.official = None    # official standings from championship_* endpoints, if available
+        self.missing = []       # "Mexico City Grand Prix - Race": results that couldn't be fetched this time
 
     # ----------------------------------------------------------------- loading
     def load(self, progress=lambda msg: None):
@@ -102,19 +145,34 @@ class Season:
                 if not s or s.get("is_cancelled") or not _session_over(s, margin=0):
                     continue
                 progress(f"{rnd.name} - {name}")
-                rows = api.get("session_result", ttl=_ttl_for(s), session_key=s["session_key"])
-                if rows:
-                    self.results[s["session_key"]] = rows
-                if name == "Race" and rows:
-                    drv = api.get("drivers", ttl=_ttl_for(s), session_key=s["session_key"])
-                    info = {d["driver_number"]: DriverInfo(
-                        d["driver_number"], d.get("name_acronym") or str(d["driver_number"]),
-                        d.get("full_name") or d.get("broadcast_name") or "", d.get("team_name") or "?",
-                        d.get("team_colour") or "FFFFFF") for d in drv}
-                    self.race_drivers[s["session_key"]] = info
-                    self.drivers.update(info)
+                try:
+                    self._load_session(name, s)
+                except (api.APIError, api.LiveSessionLock) as e:
+                    # one result that can't be had right now (offline and not cached, OpenF1 locked for a live
+                    # session) used to stop everything; the rest of the season is still worth showing
+                    self.results.pop(s["session_key"], None)
+                    self.race_drivers.pop(s["session_key"], None)
+                    self.missing.append(f"{rnd.name} - {name}")
+                    log.warning("No %s %s results yet: %s", rnd.name, name, str(e).splitlines()[0] if str(e) else e)
         self._load_official(progress)
         return self
+
+    def _load_session(self, name, s):
+        rows = api.get("session_result", ttl=_ttl_for(s), session_key=s["session_key"])
+        if rows:
+            self.results[s["session_key"]] = rows
+        if name == "Race" and rows and self.rules["fastest_lap_point"]:
+            holder = fastest_lap_point(rows, s, self.rules)
+            if holder is not None:
+                self.fastest_lap[s["session_key"]] = holder
+        if name == "Race" and rows:
+            drv = api.get("drivers", ttl=_ttl_for(s), session_key=s["session_key"])
+            info = {d["driver_number"]: DriverInfo(
+                d["driver_number"], d.get("name_acronym") or str(d["driver_number"]),
+                d.get("full_name") or d.get("broadcast_name") or "", d.get("team_name") or "?",
+                d.get("team_colour") or "FFFFFF") for d in drv}
+            self.race_drivers[s["session_key"]] = info
+            self.drivers.update(info)
 
     def _load_official(self, progress):
         last = self.completed_rounds()
@@ -125,7 +183,7 @@ class Season:
         try:
             drv = api.get("championship_drivers", ttl=_ttl_for(last[-1].race), session_key=key)
             team = api.get("championship_teams", ttl=_ttl_for(last[-1].race), session_key=key)
-        except api.APIError:
+        except (api.APIError, api.LiveSessionLock):
             return
         if drv:
             self.official = {
@@ -151,6 +209,20 @@ class Season:
                 return d
         return self.drivers.get(number) or DriverInfo(number, str(number), f"Car {number}", "?", "FFFFFF")
 
+    def session_points(self, session):
+        """{driver_number: points scored} in a race or sprint, with the fastest-lap point in seasons that had one."""
+        if not session:
+            return {}
+        table = self.rules["sprint_points" if session.get("session_name") == "Sprint" else "gp_points"]
+        out = {}
+        for row in self.result(session):
+            pos = classified(row)
+            out[row["driver_number"]] = table[pos - 1] if pos and pos <= len(table) else 0
+        holder = self.fastest_lap.get(session["session_key"])
+        if holder in out:
+            out[holder] += 1
+        return out
+
     def team_colour(self, team):
         for d in self.drivers.values():
             if d.team == team:
@@ -160,22 +232,31 @@ class Season:
     # ----------------------------------------------------------------- standings
     def standings(self, upto=None):
         """Computes driver + team standings from race and sprint results.
-        upto: include rounds up to this round number (default: all completed)."""
-        drivers, teams = {}, {}
+        upto: include rounds up to this round number (default: all completed).
+        Returns (drivers, teams, by_number). A driver who raced under two numbers (a reserve's one-off, then a race
+        seat) is one entry, reachable from both numbers."""
+        drivers, teams, by_code = {}, {}, {}
+
+        def entry(info):
+            e = by_code.get(info.code)
+            if e is None:
+                e = by_code[info.code] = Entry(info.name, info.code, info.team)
+            drivers[info.number] = e
+            return e
+
         for rnd in self.completed_rounds():
             if upto and rnd.number > upto:
                 break
             race = rnd.race
-            for sess, table, is_gp in ((rnd.sprint, RULES["sprint_points"], False),
-                                       (race, RULES["gp_points"], True)):
-                rows = self.result(sess)
-                for row in rows:
+            for sess, is_gp in ((rnd.sprint, False), (race, True)):
+                scored = self.session_points(sess)
+                for row in self.result(sess):
                     info = self.driver(row["driver_number"], race)
-                    e = drivers.setdefault(info.number, Entry(info.name, info.code, info.team))
+                    e = entry(info)
                     e.team = info.team
                     t = teams.setdefault(info.team, Entry(info.team, info.team[:3].upper(), info.team))
-                    pos = None if row.get("dsq") or row.get("dns") else row.get("position")
-                    pts = table[pos - 1] if pos and pos <= len(table) else 0
+                    pos = classified(row)
+                    pts = scored.get(row["driver_number"], 0)
                     e.points += pts
                     t.points += pts
                     if is_gp:
@@ -196,9 +277,8 @@ class Season:
             q = self.result(rnd.quali)
             pole = next((r for r in q if r.get("position") == 1), None)
             if pole:
-                info = self.driver(pole["driver_number"], race)
-                drivers.setdefault(info.number, Entry(info.name, info.code, info.team)).poles += 1
-        return sort_standings(drivers.values()), sort_standings(teams.values()), drivers
+                entry(self.driver(pole["driver_number"], race)).poles += 1
+        return sort_standings(by_code.values()), sort_standings(teams.values()), drivers
 
     def official_check(self):
         """Compares our points with OpenF1's official championship tables.
@@ -237,7 +317,7 @@ class Season:
             drivers, teams, _ = self.standings(upto=rnd.number)
             remaining = [r.has_sprint for r in self.rounds
                          if r.number > rnd.number and not r.cancelled]
-            dchamp, dcont = title_status(drivers, remaining)
-            tchamp, tcont = title_status(teams, remaining, constructor=True)
+            dchamp, dcont = title_status(drivers, remaining, rules=self.rules)
+            tchamp, tcont = title_status(teams, remaining, constructor=True, rules=self.rules)
             timeline.append((rnd, drivers, dchamp, dcont, teams, tchamp, tcont, remaining))
         return timeline

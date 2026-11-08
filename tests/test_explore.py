@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest import mock
 
 from f1hub import analysis, api, ff1, gui
+from isolation import setUpModule, tearDownModule  # noqa: F401  (offline, temporary cache)
 
 
 def iso(t):

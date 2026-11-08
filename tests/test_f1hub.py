@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from unittest import mock
 
 from f1hub import api
+from isolation import setUpModule, tearDownModule  # noqa: F401  (offline, temporary cache)
 from f1hub.championship import (Entry, clinch_scenario, countback_key, has_clinched_over,
                                 max_remaining, sort_standings, title_status)
 from f1hub.season import Season
@@ -359,17 +360,23 @@ class StreamRecordingAndPush(unittest.TestCase):
         from pathlib import Path
         from unittest import mock
         from f1hub import api
+        from f1hub.recordings import SessionRecording
         from f1hub.stream import Stream
         with tempfile.TemporaryDirectory() as d, mock.patch.object(api, "RECORD_DIR", Path(d)):
+            SessionRecording({"session_key": 1, "location": "Monza", "session_name": "Race"})
             s = Stream(connect=False)
             seen = []
             s.on_message = seen.append
             happened = datetime.fromtimestamp(time.time() - 3, timezone.utc).isoformat()
             s._publish(self._msg("position", {"session_key": 1, "driver_number": 4, "position": 1,
                                               "date": happened, "_id": 7, "_key": "a"}))
+            s._publish(self._msg("position", {"session_key": 2, "driver_number": 4, "position": 1, "date": happened}))
             s._flush_record()
-            lines = [json.loads(l) for l in gzip.open(next(Path(d).glob("*/stream.jsonl.gz")), "rt")]
-        self.assertEqual(seen, ["position"])
+            files = list(Path(d).rglob("stream.jsonl.gz"))
+            self.assertEqual([f.parent.name for f in files], ["1_Monza_Race"])     # session 2 isn't being recorded
+            lines = [json.loads(l) for l in gzip.open(files[0], "rt")]
+        self.assertEqual(seen, ["position", "position"])
+        self.assertEqual(len(lines), 1)
         self.assertEqual((lines[0]["topic"], lines[0]["row"]["_key"]), ("position", "a"))
         self.assertAlmostEqual(lines[0]["rx"], time.time(), delta=5)
         self.assertAlmostEqual(s.lag()["position"], 3, delta=0.5)
@@ -500,6 +507,12 @@ class RequestValidation(unittest.TestCase):
                          {"delay": "30", "spoiler": "1", "speed": "2.0"})
         self.assertEqual(clean_control({"mode": "replay", "session": "9999", "at": "-120"})["at"], "-120.0")
         self.assertTrue(clean_control({"at": "2026-11-01T20:00:00+00:00"})["at"].startswith("2026-11-01T20"))
+        # what the page sends (Date.toISOString): the 'Z' form, which Python before 3.11 can't parse on its own
+        self.assertEqual(clean_control({"at": "2026-11-01T20:00:00.000Z"})["at"], "2026-11-01T20:00:00+00:00")
+        from f1hub.gui import clean_before, clean_lap_query
+        self.assertEqual(clean_before("2026-11-01T20:00:05.250Z"), "2026-11-01T20:00:05.250000+00:00")
+        self.assertEqual(clean_lap_query({"driver": "1", "before": "2026-11-01T20:00:00.000Z"}, 9)[3],
+                         "2026-11-01T20:00:00+00:00")
 
     def test_control_rejects_bad_settings(self):
         from f1hub.gui import clean_control, BadRequest

@@ -17,6 +17,7 @@ import threading
 import time
 from collections import deque
 
+from .api import write_atomic
 from .radio import CACHE, fetch_clip
 
 RATE, FRAME = 16000, 160          # mono 16 kHz, 10 ms frames
@@ -105,7 +106,7 @@ class IntroFinder:
                     continue
             try:
                 s = intro_seconds(fetch_clip(url))
-                self._file(url).write_text(str(s))
+                write_atomic(self._file(url), str(s))
                 self.skip[url] = s
             except Exception:
                 self.failed[url] = time.time()     # network blip or not published yet: try again later

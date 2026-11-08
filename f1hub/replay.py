@@ -3,7 +3,7 @@
 Every request the tracker makes is answered from data cut off at the virtual time T,
 so nothing from "the future" (results, flags, points) can leak through - spoiler free.
 Full-session endpoints are fetched once and filtered in memory; location and car_data
-are too big for that, so they're fetched in small windows that end at T.
+are too big for that, so they're fetched by the minute (BUCKET) and cut off at T.
 """
 import re
 import time
@@ -11,16 +11,23 @@ from datetime import datetime, timedelta, timezone
 
 from . import api
 from .live import LiveTracker
-from .racecontrol import is_red_flag
-from .rules import RULES
+from .racecontrol import is_red_flag, neutralisation
+from .rules import FASTEST_LAP_TOP, rules_for
 
 PRELOAD = ("position", "intervals", "race_control", "laps", "stints", "pit", "weather",
            "overtakes", "team_radio", "championship_drivers")
 WINDOWED = ("location", "car_data")
+BUCKET = 60             # s: location / car_data are fetched in whole, aligned minutes, so every replay of a session
+MAX_BUCKETS = 10        # shares the same few cache entries (each tick asking for its own window cached a new file)
+UNSETTLED = 120         # s: a minute closer than this to the real time may still be filling in on OpenF1
 
 
 def _ts(s):
     return datetime.fromisoformat(s).timestamp() if s else None
+
+
+def _iso_at(t):
+    return datetime.fromtimestamp(t, timezone.utc).isoformat()
 
 
 SETTLE = 600            # s: OpenF1 is still filling in a session for a few minutes after it ends
@@ -118,6 +125,9 @@ class ReplayTracker(LiveTracker):
         self._t += timedelta(seconds=seconds)
 
     # ----------------------------------------------------------------- data
+    def _recording(self):
+        return None             # a replay records nothing
+
     def _scheduled_laps(self):
         if hasattr(self.store, "query"):        # a FastF1 session knows its own race distance
             return self.store.scheduled_laps
@@ -135,7 +145,7 @@ class ReplayTracker(LiveTracker):
                 return []
             if query:
                 return query(endpoint, **params)
-            return api.get(endpoint, ttl=api.FOREVER, **params)   # past windows never change
+            return self._by_the_minute(endpoint, params)
         if endpoint not in PRELOAD:
             if query:
                 return query(endpoint, **params)
@@ -143,6 +153,29 @@ class ReplayTracker(LiveTracker):
         rows = self.store.get(endpoint, T)
         out = self._at_time(endpoint, rows, T)
         return [r for r in out if self._match(r, params)]
+
+    def _by_the_minute(self, endpoint, params):
+        """A location / car_data window, made of whole minutes fetched (and cached) on their own and cut to size."""
+        lo_key = next((k for k in ("date>", "date>=") if params.get(k)), None)
+        lo, hi = (_ts(params[lo_key]) if lo_key else None), _ts(params["date<"])
+        if lo is None or hi - lo > MAX_BUCKETS * BUCKET:
+            return api.get(endpoint, ttl=api.FOREVER, **params)       # (nothing asks for that; just in case)
+        base = {k: v for k, v in params.items() if k not in ("date>", "date>=", "date<")}
+        finished = getattr(self.store, "finished", False)
+        rows = []
+        start = lo // BUCKET * BUCKET
+        while start < hi:
+            end = start + BUCKET
+            settled = finished or end < time.time() - UNSETTLED
+            rows += api.get(endpoint, ttl=api.FOREVER if settled else 10, **base,
+                            **{"date>=": _iso_at(start), "date<": _iso_at(end)})
+            start = end
+        out = []
+        for r in rows:
+            t = _ts(r.get("date"))
+            if t is not None and t < hi and (t > lo if lo_key == "date>" else t >= lo):
+                out.append(r)
+        return out
 
     def _driver_laps(self, T):
         laps = {}
@@ -184,12 +217,20 @@ class ReplayTracker(LiveTracker):
             pos = {}
             for p in sorted((r for r in self.store.get("position", T) if r["_ts"] <= T), key=lambda r: r["_ts"]):
                 pos[p["driver_number"]] = p["position"]
-            table = RULES["sprint_points"] if self.is_sprint else RULES["gp_points"]
+            rules = rules_for(self.session.get("year"))
+            table = rules["sprint_points"] if self.is_sprint else rules["gp_points"]
+            fastest = None       # the fastest-lap point (2019-2024): whoever holds the fastest lap so far
+            if rules["fastest_lap_point"] and not self.is_sprint:
+                done = [l for l in self.store.get("laps", T)
+                        if l["_ts"] is not None and l.get("lap_duration") and l["_ts"] + l["lap_duration"] <= T]
+                if done:
+                    fastest = min(done, key=lambda l: l["lap_duration"])["driver_number"]
             out = []
             for r in rows:
                 p = pos.get(r["driver_number"])
                 r2 = dict(r)
-                r2["points_current"] = r["points_start"] + (table[p - 1] if p and p <= len(table) else 0)
+                r2["points_current"] = r["points_start"] + (table[p - 1] if p and p <= len(table) else 0) \
+                    + (1 if r["driver_number"] == fastest and p and p <= FASTEST_LAP_TOP else 0)
                 out.append(r2)
             return out
         return [r for r in rows if r["_ts"] is None or r["_ts"] <= T]
@@ -248,10 +289,8 @@ class ReplayTracker(LiveTracker):
             elif is_red_flag(m) and not status:
                 ev(m, "red", lead=20)
                 red_open = red_open or m["date"]
-            elif "VIRTUAL SAFETY CAR DEPLOYED" in up or "VSC DEPLOYED" in up:
-                ev(m, "vsc", lead=30)
-            elif "SAFETY CAR DEPLOYED" in up:
-                ev(m, "sc", lead=30)
+            elif neutralisation(m) in ("sc", "vsc"):
+                ev(m, neutralisation(m), lead=30)
             elif status and ("FINISHED" in up or "ENDS" in up):
                 if seg_open:
                     bands.append({"kind": "seg", "label": seg_open[0], "from": seg_open[1], "to": m["date"]})

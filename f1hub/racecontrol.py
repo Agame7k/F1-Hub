@@ -1,4 +1,9 @@
-"""Makes sense of OpenF1 race_control messages: categories, sector flags, stewarding, timeline."""
+"""Makes sense of OpenF1 race_control messages: categories, sector flags, stewarding, timeline.
+
+The one place that reads them: what kind of message each is (classify), and what it does to the race
+(neutralisation: safety car, VSC, red flag, restart). Live timing, replays, race reports and the analysis all ask
+here, so they agree - they used to have a copy each, which didn't (one never saw "VIRTUAL SAFETY CAR ENDING").
+"""
 import re
 from datetime import datetime, timedelta, timezone
 
@@ -7,14 +12,80 @@ TIME_RE = re.compile(r"\((\d{2}:\d{2}:\d{2})\)")
 RESUME_AT_RE = re.compile(r"(?:RESUME|RESTART|START)\w*\s+(?:AT|TIME:?)\s+(\d{1,2})[:.](\d{2})")
 NUMS_RE = re.compile(r"\b\d{1,2}\b")
 RED_FLAG_RE = re.compile(r"\bRED FLAG\b")       # word boundary: "CHEQUERED FLAG" contains "RED FLAG"!
+BLACK_FLAG_RE = re.compile(r"\bBLACK FLAG\b")   # disqualified ("BLACK AND WHITE FLAG" is a warning)
+VSC_RE = re.compile(r"\b(?:VIRTUAL SAFETY CAR|VSC) (DEPLOYED|ENDING)\b")
 
 
 def is_red_flag(m):
     return m.get("flag") == "RED" or bool(RED_FLAG_RE.search((m.get("message") or "").upper()))
 
+
+def neutralisation(m):
+    """What a message does to the race: "sc" / "vsc" (deployed), "sc_end" / "vsc_end" (coming in), "red" (stopped),
+    "started" (under way, or again after a stoppage) - or None.
+
+    The wording, from OpenF1: SAFETY CAR DEPLOYED, SAFETY CAR IN THIS LAP; VIRTUAL SAFETY CAR DEPLOYED / VSC DEPLOYED,
+    VIRTUAL SAFETY CAR ENDING / VSC ENDING; RED FLAG (flag RED) and RED FLAG - RACE SUSPENDED (category Other); and
+    the SessionStatus messages SESSION STARTED / SESSION ABORTED (F1's status while stopped) / SESSION FINISHED.
+    "RACE WILL RESUME AT 14:02" is an announcement, not the restart."""
+    msg = (m.get("message") or "").upper()
+    if m.get("category") == "SessionStatus":
+        if "ABORTED" in msg:
+            return "red"
+        if "STARTED" in msg or "RESUMED" in msg:
+            return "started"
+        return None
+    if is_red_flag(m):
+        return "red"
+    vsc = VSC_RE.search(msg)
+    if vsc:
+        return "vsc" if vsc.group(1) == "DEPLOYED" else "vsc_end"
+    if "SAFETY CAR DEPLOYED" in msg:
+        return "sc"
+    if "SAFETY CAR IN THIS LAP" in msg or "SAFETY CAR ENDING" in msg:
+        return "sc_end"
+    return None
+
+
+def _ts(s):
+    return datetime.fromisoformat(s).timestamp()
+
+
+def neutral_periods(rc):
+    """(start, end) epoch spans under a safety car, VSC or red flag. A safety car comes in at the end of the lap after
+    "IN THIS LAP" (~90 s); a VSC ends ~20 s after "ENDING"; a red flag at the restart."""
+    out, cur = [], None
+    for m in sorted((m for m in rc if m.get("date")), key=lambda m: m["date"]):
+        kind = neutralisation(m)
+        if cur is None and kind in ("sc", "vsc", "red"):
+            cur = _ts(m["date"])
+        elif cur is not None and kind in ("sc_end", "vsc_end", "started"):
+            out.append((cur, _ts(m["date"]) + (90 if kind == "sc_end" else 20)))
+            cur = None
+    if cur is not None:
+        out.append((cur, float("inf")))
+    return out
+
+
+def neutralisation_counts(rc):
+    """{"sc", "vsc", "red"}: how many of each. A stoppage counts once, however many messages announce it
+    (RED FLAG, RED FLAG - RACE SUSPENDED, SESSION ABORTED)."""
+    out = {"sc": 0, "vsc": 0, "red": 0}
+    stopped = False
+    for m in sorted(rc, key=lambda m: m.get("date") or ""):
+        kind = neutralisation(m)
+        if kind == "red":
+            out["red"] += not stopped
+            stopped = True
+        elif kind == "started":
+            stopped = False
+        elif kind in ("sc", "vsc"):
+            out[kind] += 1
+    return out
+
 # group -> kinds, used by the GUI filter buttons
 GROUPS = {
-    "flags": ("red", "sector", "blue", "green", "chequered", "black_white", "black_orange", "track_clear"),
+    "flags": ("red", "sector", "blue", "green", "chequered", "black", "black_white", "black_orange", "track_clear"),
     "safety": ("sc", "vsc", "sc_end", "incident"),
     "stewards": ("penalty", "investigation", "decision", "track_limits", "lap_deleted", "reprimand"),
     "session": ("session", "overtake_mode", "info", "pit", "weather", "start"),
@@ -39,6 +110,8 @@ def classify(m):
         return "sc_end" if ("IN THIS LAP" in msg or "ENDING" in msg) else "sc"
     if flag == "CHEQUERED":
         return "chequered"
+    if flag == "BLACK" or BLACK_FLAG_RE.search(msg):
+        return "black"
     if flag == "BLACK AND WHITE":
         return "black_white"
     if flag == "BLACK AND ORANGE":
@@ -57,7 +130,7 @@ def classify(m):
         return "reprimand"
     if "NO FURTHER" in msg or "NO INVESTIGATION" in msg or "NOT NECESSARY" in msg:
         return "decision"
-    if "INVESTIGATION" in msg or "NOTED" in msg or "REVIEWED" in msg or "SUMMONED" in msg:
+    if "INVESTIGAT" in msg or "NOTED" in msg or "REVIEWED" in msg or "SUMMONED" in msg:
         return "investigation"
     if "DELETED" in msg:
         return "lap_deleted"
@@ -145,7 +218,7 @@ class RaceControl:
             d = self._driver(n)
             if kind in tally:
                 d[tally[kind]] += 1
-            if kind in ("penalty", "investigation", "decision", "reprimand", "black_white", "black_orange",
+            if kind in ("penalty", "investigation", "decision", "reprimand", "black", "black_white", "black_orange",
                         "lap_deleted", "track_limits"):
                 d["items"].append({"lap": rec["lap"], "time": rec["time"], "kind": kind, "text": msg, "cars": cars})
         return rec
@@ -202,7 +275,7 @@ class RaceControl:
 
     def stewards(self):
         """Every stewarding message, newest first."""
-        return [m for m in reversed(self.messages) if m["group"] == "stewards" or m["kind"] in ("black_white",)]
+        return [m for m in reversed(self.messages) if m["group"] == "stewards" or m["kind"] in ("black", "black_white")]
 
     def snapshot(self, code_of):
         drivers = []

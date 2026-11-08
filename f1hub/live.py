@@ -17,15 +17,22 @@ from . import api, quali
 from .incidents import IncidentDetector, confirmations_from
 from .championship import Entry, max_remaining, sort_standings, title_status
 from .display import GOLD, c, dim, fmt_time, header, pad, tyre
-from .racecontrol import RaceControl, is_red_flag
-from .rules import RULES, points_for_distance
+from .racecontrol import RaceControl, is_red_flag, neutralisation
+from .rules import points_for_distance
+
+def _ts(s):
+    """Epoch seconds of an OpenF1 date (with or without its UTC offset), or None."""
+    if not s:
+        return None
+    try:
+        d = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return (d if d.tzinfo else d.replace(tzinfo=timezone.utc)).timestamp()
+
 
 FLAG_COLOURS = {"GREEN": "39B54A", "YELLOW": "FFD300", "DOUBLE YELLOW": "FFD300", "RED": "FF0000",
                 "SC": "FFB000", "VSC": "FFB000", "CHEQUERED": "FFFFFF"}
-
-
-def _get(endpoint, **params):
-    return api.get(endpoint, cache=False, **params)
 
 
 class LiveTracker:
@@ -35,6 +42,7 @@ class LiveTracker:
             raise api.APIError("OpenF1 has no current session")
         self.session = sessions[0]
         self.key = self.session["session_key"]
+        self.recording = self._recording()
         self.is_race = self.session["session_type"] in ("Race",)
         self.is_sprint = self.session["session_name"] == "Sprint"
         meeting = self._fetch("meetings", meeting_key=self.session["meeting_key"])
@@ -81,6 +89,8 @@ class LiveTracker:
         self.view = None           # dashboard tab on screen (fetch priority)
         self._last_fetch = {}      # endpoint -> time of last REST fetch
         self._rc_seen = set()
+        self._seen = {}            # endpoint -> {row key: time}: rows _new() has returned (see LOOKBACK)
+        self._row_at = {}          # (endpoint, driver) -> time of the row applied last, so a late row can't undo it
         self._latency = deque(maxlen=40)   # seconds between a location sample happening and reaching us
         self._newest_loc = 0
         self._data_t = 0.0                 # data_time never runs backwards
@@ -116,7 +126,13 @@ class LiveTracker:
     # ----------------------------------------------------------------- data source + clock
     # Everything goes through these two, so a replay can run the same logic on a virtual clock.
     def _fetch(self, endpoint, **params):
-        return _get(endpoint, **params)
+        rec = getattr(self, "recording", None)
+        return api.get(endpoint, cache=False, record=rec.rest if rec and rec.on else None, **params)
+
+    def _recording(self):
+        """Where this session's live data is recorded (recordings/openf1/...), or None with recording off."""
+        from .recordings import SessionRecording
+        return SessionRecording(self.session) if api.RECORD_DIR is not None else None
 
     def now(self):
         return datetime.now(timezone.utc)
@@ -137,28 +153,71 @@ class LiveTracker:
         return None
 
     # ----------------------------------------------------------------- polling
+    # A REST fetch asks again from this many seconds before the newest row it has. Rows can turn up late (team radio
+    # once its clip is ready), and the stream can miss one (a reconnect): asking only for rows newer than the newest
+    # would never find those, because the newest row has already moved past them. Rows already seen are skipped.
+    LOOKBACK = {"intervals": 20, "team_radio": 300}
+    LOOKBACK_DEFAULT = 90
+
     def _new(self, endpoint, **params):
-        """Rows newer than the last one we saw: pushed by the stream, plus a REST fetch when due."""
-        since = self._since.get(endpoint)
-        rows = [r for r in self._pushed(endpoint) if r.get("date") and (not since or r["date"] > since)]
+        """Rows not seen before, oldest first: pushed by the stream, plus a REST fetch when due. One that came in late
+        can be older than rows returned earlier - see _in_order() and _newest()."""
+        since = _ts(self._since.get(endpoint))          # (_since keeps the newest row's own date text)
+        back = self.LOOKBACK.get(endpoint, self.LOOKBACK_DEFAULT)
+        rows = list(self._pushed(endpoint))
         if self._due(endpoint):
-            if since:
-                params["date>"] = since
+            if since is not None:
+                params["date>"] = self._iso(datetime.fromtimestamp(since - back, timezone.utc))
             rows += self._fetch(endpoint, session_key=self.key, **params)
-            seen, uniq = set(), []
-            for r in rows:
-                k = (r.get("date"), r.get("driver_number"), r.get("message"), r.get("position"))
-                if k not in seen:
-                    seen.add(k)
-                    uniq.append(r)
-            rows = uniq
-        if rows:
-            self._since[endpoint] = max(r["date"] for r in rows)
-        return sorted(rows, key=lambda r: r["date"])
+        seen, out = self._seen.setdefault(endpoint, {}), []
+        for r in rows:
+            t = _ts(r.get("date"))
+            if t is None:
+                continue
+            k = (round(t, 3), r.get("driver_number"), r.get("message"), r.get("position"))
+            if k not in seen:
+                seen[k] = t
+                out.append((t, r))
+        out.sort(key=lambda x: x[0])
+        if out and (since is None or out[-1][0] > since):
+            self._since[endpoint], since = out[-1][1]["date"], out[-1][0]
+        if len(seen) > 3000:                # forget rows too old to be asked for again
+            for k in [k for k, t in seen.items() if t < since - 2 * back]:
+                del seen[k]
+        return [r for _, r in out]
+
+    def _newest(self, endpoint, row):
+        """Whether row is at least as new as the last one applied for its driver (a late row mustn't undo a newer one)."""
+        k, t = (endpoint, row.get("driver_number")), _ts(row.get("date")) or 0
+        if t < self._row_at.get(k, 0):
+            return False
+        self._row_at[k] = t
+        return True
+
+    @staticmethod
+    def _in_order(lst, rows):
+        """Add rows (oldest first) to lst, keeping it in time order: one that came in late goes where it belongs."""
+        if not rows:
+            return
+        late = lst and (_ts(rows[0].get("date")) or 0) < (_ts(lst[-1].get("date")) or 0)
+        lst.extend(rows)
+        if late:
+            lst.sort(key=lambda r: _ts(r.get("date")) or 0)
 
     @staticmethod
     def _iso(dt):
         return dt.astimezone(timezone.utc).isoformat()
+
+    LAP_STALE = 300     # s: a car whose current lap began longer ago than this has stopped (retired, in the garage)
+
+    def _lap_floor(self):
+        """The first lap a laps fetch asks for: the one before the lap the slowest car still running is on. Asking
+        only around the leader's lap would never fetch the laps of a car that's been lapped twice. Cars that have
+        stopped don't hold it back."""
+        now = self.now().timestamp()
+        running = [lap for n, lap in self.lap_no.items() if n not in getattr(self, "retired", {})
+                   and now - (_ts((self.laps_by.get(n, {}).get(lap) or {}).get("start")) or 0) < self.LAP_STALE]
+        return max(1, min(running or [max(self.lap_no.values(), default=1)]) - 1)
 
     def _store_lap(self, lap):
         n = lap["driver_number"]
@@ -237,9 +296,12 @@ class LiveTracker:
         tick = self.refreshes
         # ---------------- fast tier
         for p in self._new("position"):
-            self.position[p["driver_number"]] = p["position"]
+            if self._newest("position", p):
+                self.position[p["driver_number"]] = p["position"]
         if self.is_race:
             for i in self._new("intervals"):
+                if not self._newest("intervals", i):
+                    continue
                 n = i["driver_number"]
                 self.gap[n] = i.get("gap_to_leader")
                 self.interval[n] = i.get("interval")
@@ -249,22 +311,14 @@ class LiveTracker:
                     hist = self.gap_hist.setdefault(n, [])
                     if not hist or t - hist[-1][0] >= 15:
                         hist.append([round(t), g or 0.0])
-        for m in self._new("race_control"):
-            k = (m["date"], m.get("message"))
-            if k in self._rc_seen:
-                continue
-            self._rc_seen.add(k)
-            self.messages.append(m)
-            self.rc.add(m)
-            self._track_status(m)
+        self._add_messages(self._new("race_control"))
         for lap in self._pushed("laps"):            # stream sends each lap again as sectors complete
             self._store_lap(lap)
         if tick == 0:
             for lap in self._fetch("laps", session_key=self.key):
                 self._store_lap(lap)
         elif self._due("laps"):
-            top_lap = max(self.lap_no.values(), default=1)
-            for lap in self._fetch("laps", session_key=self.key, **{"lap_number>=": max(1, top_lap - 1)}):
+            for lap in self._fetch("laps", session_key=self.key, **{"lap_number>=": self._lap_floor()}):
                 self._store_lap(lap)
         pushed = self._pushed("location")
         for r in pushed:
@@ -294,11 +348,11 @@ class LiveTracker:
             for p in self.pit_list:
                 self.pits[p["driver_number"]] = self.pits.get(p["driver_number"], 0) + 1
         w = self._new("weather")              # these three fetch on their own schedule inside _new
-        self.weather_hist.extend(w)
+        self._in_order(self.weather_hist, w)
         if w:
-            self.weather = w[-1]
-        self.overtake_list.extend(self._new("overtakes"))
-        self.radio.extend(self._new("team_radio"))
+            self.weather = self.weather_hist[-1]
+        self._in_order(self.overtake_list, self._new("overtakes"))
+        self._in_order(self.radio, self._new("team_radio"))
         if self.is_race and self._due("championship_drivers"):
             try:
                 self.champ = self._fetch("championship_drivers", session_key=self.key) or None
@@ -495,33 +549,56 @@ class LiveTracker:
             if number:
                 self._refresh_telemetry()
 
+    def _add_messages(self, rows):
+        late = False
+        for m in rows:
+            k = (m["date"], m.get("message"))
+            if k in self._rc_seen:
+                continue
+            self._rc_seen.add(k)
+            late = late or bool(self.messages) and (_ts(m["date"]) or 0) < (_ts(self.messages[-1]["date"]) or 0)
+            self.messages.append(m)
+            if not late:
+                self.rc.add(m)
+                self._track_status(m)
+        if late:
+            self._reread_messages()
+
+    def _reread_messages(self):
+        """A race-control message came in late, older than ones already read: read them all again in time order (the
+        flags, neutralisations and track status depend on the order)."""
+        self.messages.sort(key=lambda m: _ts(m.get("date")) or 0)
+        self.rc = RaceControl(self.session.get("gmt_offset"))
+        self.track_status = "GREEN"
+        for m in self.messages:
+            self.rc.add(m)
+            self._track_status(m)
+
     def _track_status(self, m):
         msg = (m.get("message") or "").upper()
-        flag = m.get("flag")
+        flag, kind = m.get("flag"), neutralisation(m)
+        track_wide = m.get("scope") in (None, "Track")
         if m.get("category") == "SessionStatus":
-            if "ABORTED" in msg:            # F1's status while a session is suspended
+            if kind == "red":               # SESSION ABORTED: F1's status while a session is suspended
                 self.track_status = "RED"
             elif "FINISHED" in msg or "ENDED" in msg or "FINALISED" in msg:
                 self.track_status = "CHEQUERED"
-            elif "STARTED" in msg or "RESUMED" in msg:
+            elif kind == "started":
                 self.track_status = "GREEN"
             return
-        if is_red_flag(m):
+        if kind == "red":
             self.track_status = "RED"
-        elif "VIRTUAL SAFETY CAR DEPLOYED" in msg or "VSC DEPLOYED" in msg:
-            self.track_status = "VSC"
-        elif "SAFETY CAR DEPLOYED" in msg:
-            self.track_status = "SC"
+        elif kind in ("sc", "vsc"):
+            self.track_status = kind.upper()
         elif flag == "CHEQUERED":
             self.track_status = "CHEQUERED"
         elif self.track_status == "RED":
             # announcements like "RACE WILL RESUME AT 15:45" are not the restart itself;
             # only the session status (handled above) or a track-wide green flag ends a red flag
-            if flag == "GREEN" and m.get("scope") in (None, "Track"):
+            if flag == "GREEN" and track_wide:
                 self.track_status = "GREEN"
-        elif flag == "GREEN" or "TRACK CLEAR" in msg or "IN THIS LAP" in msg or "VSC ENDING" in msg:
-            if m.get("scope") in (None, "Track") or "SAFETY CAR" in msg or "VSC" in msg:
-                self.track_status = "GREEN"
+        elif kind in ("sc_end", "vsc_end") or ((flag == "GREEN" or "TRACK CLEAR" in msg) and track_wide):
+            self.track_status = "GREEN"
 
     # ----------------------------------------------------------------- views
     def code(self, n):
@@ -576,11 +653,11 @@ class LiveTracker:
                      if r.number > this_round and not r.cancelled]
         if self.is_sprint:   # this weekend's GP is still to come
             remaining.insert(0, False)
-        champ, contenders = title_status(table, remaining)
+        champ, contenders = title_status(table, remaining, rules=season.rules)
         # was it already settled before this session? (then today isn't the day it was won)
         before = [Entry(e.name, e.code, points=e.start, finishes=e.past_finishes) for e in table]
         rem_before = ([True] + remaining[1:]) if self.is_sprint else [False] + remaining
-        champ_before, _ = title_status(before, rem_before)
+        champ_before, _ = title_status(before, rem_before, rules=season.rules)
         self.title_decided_before = champ_before.code if champ_before else None
         return table, champ, contenders, remaining, table_pts
 
@@ -629,7 +706,7 @@ class LiveTracker:
                     "decided_before": getattr(self, "title_decided_before", None),
                     "year": self.session.get("year"),
                     "contenders": [e.code for e in contenders], "rounds_left": len(remaining),
-                    "points_left": max_remaining(remaining),
+                    "points_left": max_remaining(remaining, rules=season.rules),
                     "table": [{"code": e.code, "name": e.name, "points": e.points, "delta": e.points - e.start}
                               for e in table[:8]]}
 

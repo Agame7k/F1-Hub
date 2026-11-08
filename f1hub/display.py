@@ -4,7 +4,6 @@ import re
 import sys
 
 from .championship import clinch_scenario, max_remaining
-from .rules import RULES
 
 USE_COLOR = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
 TYRE_COLOURS = {"SOFT": "E10600", "MEDIUM": "FFD300", "HARD": "F0F0F0", "INTERMEDIATE": "39B54A", "WET": "0067FF"}
@@ -114,8 +113,8 @@ def print_title_fight(season, drivers, teams, dchamp, dcont, tchamp, tcont, time
     flags = [r.has_sprint for r in remaining]
     print(header(f"{season.year} TITLE FIGHT", colour=GOLD))
     print(f"  Rounds left: {len(remaining)} ({sum(flags)} sprint weekends)   "
-          f"Max points still available: drivers {max_remaining(flags):g}, "
-          f"constructors {max_remaining(flags, constructor=True):g}")
+          f"Max points still available: drivers {max_remaining(flags, rules=season.rules):g}, "
+          f"constructors {max_remaining(flags, constructor=True, rules=season.rules):g}")
 
     for label, table, champ, cont, constructor in (
             ("DRIVERS", drivers, dchamp, dcont, False), ("CONSTRUCTORS", teams, tchamp, tcont, True)):
@@ -134,7 +133,7 @@ def print_title_fight(season, drivers, teams, dchamp, dcont, tchamp, tcont, time
             print(champion_banner(title, champ.name, None if constructor else champ.team,
                                   season.team_colour(champ.team), detail))
             continue
-        best = max_remaining(flags, constructor)
+        best = max_remaining(flags, constructor, season.rules)
         for e in table[:6]:
             alive = e in cont
             gap = table[0].points - e.points
@@ -142,7 +141,7 @@ def print_title_fight(season, drivers, teams, dchamp, dcont, tchamp, tcont, time
                 (c(f"in contention (needs {gap:g} of {best:g} available)", "39B54A") if alive
                  else dim("eliminated"))
             print(f"    {pad(c(e.name, season.team_colour(e.team), bold=True), 24)}{e.points:>6g}  {state}")
-        sc = clinch_scenario(table, flags, constructor)
+        sc = clinch_scenario(table, flags, constructor, season.rules)
         if sc:
             nxt = remaining[0]
             print(c(f"  >> CLINCH WATCH ({nxt.name}): ", "FFB000", bold=True) + sc)
@@ -202,7 +201,7 @@ def print_race_report(rep):
     print(f"  Safety cars: {sc['safety_cars']}   VSCs: {sc['vscs']}   Red flags: {sc['red_flags']}   "
           f"Track-limits messages: {sc['track_limits']}")
 
-    pts_table = RULES["sprint_points"] if name == "Sprint" else RULES["gp_points"]
+    scored = s.session_points(rep.session) if name in ("Race", "Sprint") else {}    # (fastest-lap point included)
     strategy = rep.tyre_strategy()
     stops, fastest_stop = rep.pit_summary()
     made, lost = rep.overtake_counts()
@@ -229,7 +228,7 @@ def print_race_report(rep):
             g = grid - pos
             delta = c(f"+{g}", "39B54A") if g > 0 else c(str(g), "FF5050") if g < 0 else " 0"
         tyres = "-".join(tyre(st[0]) for st in strategy.get(r["driver_number"], []))
-        pts = pts_table[pos - 1] if pos and pos <= len(pts_table) and not r.get("dsq") else 0
+        pts = scored.get(r["driver_number"], 0)
         pos_s = f"{pos:>3}" if pos else " NC"
         print(f"  {pos_s}  {pad(c(d.name, d.colour, bold=True), 22)}{d.team[:15]:<16}{grid or '-':>4} "
               f"{pad(delta, 4, right=True)}  {status:<15}{stops.get(r['driver_number'], 0):>4} "

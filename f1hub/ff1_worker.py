@@ -14,6 +14,7 @@ import gzip
 import json
 import math
 import os
+import signal
 import sys
 import time
 import warnings
@@ -26,6 +27,8 @@ warnings.filterwarnings("ignore")
 
 CACHE = os.environ.get("F1HUB_FF1_CACHE") or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                                           ".f1cache", "fastf1")
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))     # (-I leaves this folder off the path)
+import ff1_signin  # noqa: E402
 DURATION = {"Race": 2.5, "Sprint": 1.0}     # hours, for the schedule's date_end (FastF1 only knows the start)
 LOADED = OrderedDict()                       # ref key -> loaded Session (laps + telemetry), newest last
 KEEP = 2
@@ -470,28 +473,6 @@ COMMANDS = {
 
 
 # ------------------------------------------------------------------------------------------------ F1 TV sign-in
-def no_interactive_sign_in():
-    """Never start a sign-in from this worker. FastF1's browser sign-in prints a URL (into our log, where nobody
-    sees it) and then waits forever, which hangs every request. The dashboard runs the sign-in instead
-    (ff1.LOGIN) and FastF1 stores the token, which this worker then reads from disk. The password method still
-    signs in here when F1_USERNAME / F1_PASSWORD are set, since that needs no interaction."""
-    try:
-        from fastf1.exceptions import F1AuthError
-        from fastf1.internals import f1account
-    except ImportError:
-        return
-    try:
-        method = f1account.get_auth_method()
-    except ValueError:
-        method = "browser"
-    if method == "password" and os.environ.get("F1_USERNAME") and os.environ.get("F1_PASSWORD"):
-        return
-
-    def refuse():
-        raise F1AuthError("not signed in to F1 TV (sign in from Explore > FastF1 in F1 Hub)")
-    f1account.token_manager._default_auth_func = refuse
-
-
 def auth_status():
     """The F1 TV token FastF1 has stored on disk, without signing in."""
     from fastf1.internals.f1account.tokens import TokenManager
@@ -520,6 +501,9 @@ def lap_list(ref):
 
 
 def main():
+    # Ctrl+C in the dashboard's terminal reaches this process too: leave it to the dashboard, which closes our
+    # stdin when it stops (the loop below then ends) - no KeyboardInterrupt traceback in the log
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
     import fastf1
     os.makedirs(CACHE, exist_ok=True)
     try:
@@ -527,7 +511,7 @@ def main():
     except Exception:
         pass
     fastf1.set_log_level("WARNING")
-    no_interactive_sign_in()
+    ff1_signin.install(CACHE)        # no browser sign-in here; a rejected password isn't sent again
     print(json.dumps({"ready": True, "version": fastf1.__version__}), file=OUT, flush=True)
     for line in sys.stdin:
         try:
@@ -539,8 +523,11 @@ def main():
             out = {"id": job.get("id"), "ok": res}
         except Exception as e:      # one bad session must not take the worker down
             out = {"id": job.get("id"), "error": f"{type(e).__name__}: {e}"}
-        print(json.dumps(out, default=str, allow_nan=False) if _finite(out) else json.dumps(_clean(out), default=str),
-              file=OUT, flush=True)
+        try:
+            print(json.dumps(out, default=str, allow_nan=False) if _finite(out) else json.dumps(_clean(out), default=str),
+                  file=OUT, flush=True)
+        except BrokenPipeError:     # the dashboard went away mid-job
+            return
 
 
 def _finite(o):

@@ -10,13 +10,15 @@
     python3 -m f1hub export results.json
     python3 -m f1hub live                 live timing for the session running now (paid OpenF1 login)
     python3 -m f1hub gui                  live dashboard in your browser (http://localhost:8765)
+    python3 -m f1hub doctor               check the setup and say what to fix
+    python3 -m f1hub cleanup              free disk space F1 Hub no longer needs (--yes to delete)
 """
 import argparse
 import json
 import sys
 from datetime import datetime, timezone
 
-from . import api
+from . import api, logs
 from .championship import title_status
 from .display import (c, dim, print_braking, print_calendar, print_driver_standings, print_h2h,
                       print_race_report, print_team_standings, print_title_fight, set_color)
@@ -29,6 +31,8 @@ def load_season(year):
         print(dim(f"  loading {msg}..."), end="\r", file=sys.stderr, flush=True)
     s = Season(year).load(progress)
     print(" " * 70, end="\r", file=sys.stderr)
+    if s.missing:
+        print(c("  Results not available yet (left out): " + ", ".join(s.missing), "FFB000"), file=sys.stderr)
     return s
 
 
@@ -37,8 +41,8 @@ def standings_with_titles(season):
     issues = season.official_check()
     drivers, teams = season.apply_official_points(drivers, teams, by_number)
     flags = [r.has_sprint for r in season.remaining_rounds()]
-    dchamp, dcont = title_status(drivers, flags) if drivers else (None, [])
-    tchamp, tcont = title_status(teams, flags, constructor=True) if teams else (None, [])
+    dchamp, dcont = title_status(drivers, flags, rules=season.rules) if drivers else (None, [])
+    tchamp, tcont = title_status(teams, flags, constructor=True, rules=season.rules) if teams else (None, [])
     return drivers, teams, issues, dchamp, dcont, tchamp, tcont
 
 
@@ -204,21 +208,41 @@ def main(argv=None):
     gu.add_argument("--no-browser", action="store_true")
     e = sub.add_parser("export")
     e.add_argument("path", nargs="?", default="f1_export.json")
+    dr = sub.add_parser("doctor", help="check the setup and say what to fix")
+    dr.add_argument("--port", type=int, default=8765, help="the dashboard's port")
+    dr.add_argument("--no-network", action="store_true", help="skip the checks that contact OpenF1")
+    cl = sub.add_parser("cleanup", help="free disk space F1 Hub no longer needs")
+    cl.add_argument("--yes", action="store_true", help="delete (without it, only shows what would go)")
+    cl.add_argument("--recordings-older-than", type=int, metavar="DAYS",
+                    help="also delete recordings of sessions more than DAYS days old")
     args = p.parse_args(argv)
     if args.no_color:
         set_color(False)
     api.offline = args.offline
+    logs.setup()
 
     try:
-        season = load_season(args.year)
+        if args.cmd == "doctor":
+            from .doctor import run
+            return run(args.port, network=not args.no_network)
+        if args.cmd == "cleanup":
+            from .cleanup import run
+            return run(args.yes, args.recordings_older_than)
         if args.cmd == "gui":
             from .gui import serve
-            serve(season, args.session, args.interval, args.port, not args.no_browser)
+            serve(args.year, args.session, args.interval, args.port, not args.no_browser)   # loads the season itself
             return 0
         if args.cmd == "live":
             from .live import watch
+            try:
+                season = load_season(args.year)
+            except (api.APIError, api.LiveSessionLock) as err:   # live timing doesn't need it, only the title picture
+                print(c(f"Couldn't load the season ({str(err).splitlines()[0]}): no title picture.", "FFB000"),
+                      file=sys.stderr)
+                season = None
             watch(season, args.session, args.interval, args.once)
             return 0
+        season = load_season(args.year)
         if not args.cmd:
             menu(season)
         elif args.cmd == "standings":

@@ -73,6 +73,8 @@ python3 -m f1hub h2h                     # teammate qualifying/race head-to-head
 python3 -m f1hub export season.json      # everything as JSON
 python3 -m f1hub live                    # live timing in the terminal (paid OpenF1 login)
 python3 -m f1hub gui                     # browser dashboard
+python3 -m f1hub doctor                  # check the setup: logins, stream, FastF1, tools, disk, recent errors
+python3 -m f1hub cleanup                 # show what disk space can be freed (add --yes to free it)
 ```
 
 The command line covers OpenF1 seasons (2023 onwards); 2018-2022 are in the dashboard with FastF1.
@@ -86,8 +88,11 @@ The command line covers OpenF1 seasons (2023 onwards); 2018-2022 are in the dash
 | `--session KEY` | `live`, `gui` | OpenF1 `session_key` to follow (default: `latest`) |
 | `--interval N` | `live`, `gui` | Seconds between REST refreshes (default 10, min 8) |
 | `--once` | `live` | Print one snapshot and exit |
-| `--port N` | `gui` | Port for the dashboard (default 8765) |
+| `--port N` | `gui`, `doctor` | Port for the dashboard (default 8765) |
 | `--no-browser` | `gui` | Don't open a browser tab |
+| `--no-network` | `doctor` | Skip the checks that contact OpenF1 |
+| `--yes` | `cleanup` | Delete what it lists (without it, nothing is deleted) |
+| `--recordings-older-than DAYS` | `cleanup` | Also clear recordings of sessions older than that |
 
 ### What the reports show
 
@@ -144,9 +149,9 @@ Restart F1 Hub after changing them. All the settings:
 | `OPENF1_TOKEN` | | Use an OpenF1 token you already have instead |
 | `F1_USERNAME`, `F1_PASSWORD` | | F1 TV Pro login for FastF1 (2023+ archive, full recordings) |
 | `FASTF1_AUTH_METHOD` | | Set to `browser` to ignore `F1_USERNAME`/`F1_PASSWORD` and use only the browser sign-in (Explore > FastF1 > *Sign in to F1 TV*) |
-| `F1HUB_RECORD` | on | `0` turns off saving live API responses and the MQTT stream |
+| `F1HUB_RECORD` | on | `0` turns off saving live API responses and the MQTT stream (saved recordings still play back) |
 | `F1HUB_RECORD_DIR` | `recordings/` | Where recordings go |
-| `F1HUB_CACHE` | `.f1cache/` | Where API responses, FIA PDFs and transcripts are cached |
+| `F1HUB_CACHE` | `.f1cache/` | Where API responses, FastF1 data, FIA documents, radio clips, transcripts and the log file are kept |
 | `F1HUB_STT_MODEL` | `small.en` | Whisper model; `base.en` is faster but rougher |
 | `F1HUB_STT_THREADS` | `4` | CPU threads for transcription |
 | `NO_COLOR` | | Plain terminal output |
@@ -154,8 +159,15 @@ Restart F1 Hub after changing them. All the settings:
 ## Data, limits and storage
 
 - **Rate limits:** requests are limited client-side to **6 per second and 60 per minute**. On a 429 or a 5xx the client backs off exponentially and honours `Retry-After`. During a live session the dashboard spreads its polling across those 60 a minute ([details](docs/dashboard.md#polling-budget)); the MQTT stream doesn't count against it.
-- **Cache:** responses are cached in `.f1cache/`. Results from sessions more than 4 days old are cached for good, and recent ones refresh every 15 minutes. Delete the folder to refetch everything.
-- **Recordings:** during live sessions, every API response is saved to `recordings/<date>/<endpoint>.jsonl.gz` (one JSON line per request: the time, the request and the full response), and every MQTT message to `recordings/<date>/stream.jsonl.gz` with its arrival time. This lets a race be replayed and studied later, and its real latency checked. Expect roughly 30-40 MB per race hour. FastF1 recordings go to `recordings/fastf1/`. Set `F1HUB_RECORD=0` to turn recording off.
+- **Cache:** responses are cached in `.f1cache/`. Results from sessions more than 4 days old are cached for good, and recent ones refresh every 15 minutes. `python3 -m f1hub cleanup` lists what can safely go (and how much space each part of the cache uses); delete the folder to refetch everything.
+- **Recordings:** during live sessions, every API response is saved to `recordings/openf1/<session>/<endpoint>.jsonl.gz` (one JSON line per request: the time, the request and the full response), and every MQTT message to `stream.jsonl.gz` in the same folder with its arrival time. Recording stops by itself once the session is over. Recorded sessions play back like any other replay, and Explore > FastF1 & recordings shows how late the data reached you (*Delays*). Expect roughly 30-40 MB per race hour. Recordings from older versions, in `recordings/<date>/`, still play back. FastF1 recordings go to `recordings/fastf1/`. Set `F1HUB_RECORD=0` to turn recording off.
+- **Logs:** warnings and errors go to the terminal as one line each, and in full (with details) to `.f1cache/logs/f1hub.log`, rotated at 1 MB with three older copies kept.
+
+## When something isn't working
+
+- Click **Status** in the dashboard's header (or press `D`). It checks the settings, the OpenF1 login, the season data, the live feed and the stream, recording, FastF1 and the F1 TV sign-in, the tools (ffmpeg, poppler, faster-whisper), disk space and leftover sign-in windows, and lists the latest warnings. The button turns amber or red when something needs a look, and a banner says when a changed `.openf1.env` needs a restart.
+- Run `python3 -m f1hub doctor` for the same checks from the terminal, with or without the dashboard running. It also logs in to OpenF1, tries the stream and checks that the dashboard's port is free (`--no-network` skips contacting OpenF1). It shows only the names of the settings in `.openf1.env`, never their values.
+- The full detail of any error is in `.f1cache/logs/f1hub.log`.
 
 ## Project layout
 
@@ -166,20 +178,24 @@ Restart F1 Hub after changing them. All the settings:
 | `f1hub/season.py`, `championship.py`, `rules.py` | Season loading, points tables (edit `rules.py` if the regulations change), title maths |
 | `f1hub/report.py`, `display.py` | Race reports and everything the terminal prints |
 | `f1hub/live.py`, `stream.py` | Live poller (`VIEW_NEEDS`, `CADENCE`) and the MQTT client |
-| `f1hub/gui.py`, `dashboard.html` | Dashboard server and the single-page dashboard |
+| `f1hub/gui.py`, `dashboard.html`, `web/` | Dashboard server, the page, and its scripts and styles |
 | `f1hub/home.py`, `replay.py`, `quali.py` | Home page, replays on a virtual clock, the qualifying picture (Q1/Q2/Q3, knockouts) |
 | `f1hub/racecontrol.py` | Race control messages: categories, sector flags, timeline |
 | `f1hub/stewards.py`, `fia.py` | Provisional grid, penalty points and reprimands; FIA decisions and regulation text |
 | `f1hub/incidents.py` | Crash detection |
 | `f1hub/laptrace.py`, `analysis.py` | Lap compare, the Explore tab's analysis |
 | `f1hub/radio.py`, `sting.py`, `transcribe.py`, `stt_worker.py` | Team radio, intro-sting skipping, speech-to-text |
-| `f1hub/ff1.py`, `ff1_worker.py`, `ff1_record.py` | FastF1 bridge, worker process and recorder |
+| `f1hub/ff1.py`, `ff1_worker.py`, `ff1_record.py`, `ff1_signin.py` | FastF1 bridge, worker process, recorder and the F1 TV sign-in |
+| `f1hub/recordings.py` | Live recordings: writing, playback and the delay figures |
+| `f1hub/logs.py`, `doctor.py`, `cleanup.py` | Logging, the setup check, freeing disk space |
 
 ## Tests
 
 ```bash
 python3 -m unittest discover -s tests -v
 ```
+
+The tests run offline with a temporary cache and never read your credentials. GitHub Actions runs them on Python 3.9, 3.12 and 3.14 (`.github/workflows/tests.yml`), and syntax-checks the dashboard scripts.
 
 ## Credits and disclaimer
 

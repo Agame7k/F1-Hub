@@ -2,13 +2,24 @@
 
   python ff1_record.py <file> [--timeout S] [--no-auth]
 
-The same as `python -m fastf1.livetiming save`, plus a workaround: FastF1 3.9 hands signalrcore `None` as the
-token factory when there's no login, which signalrcore rejects ("access_token_factory is not function").
-Leaving the option out instead connects to F1's free feed as intended.
+The same as `python -m fastf1.livetiming save`, plus:
+- a workaround: FastF1 3.9 hands signalrcore `None` as the token factory when there's no login, which signalrcore
+  rejects ("access_token_factory is not function"). Leaving the option out instead connects to F1's free feed;
+- F1 Hub's sign-in rules (ff1_signin.py): no browser sign-in from here, and a password F1 has rejected isn't sent
+  again;
+- FastF1's cache in F1 Hub's folder (F1HUB_FF1_CACHE) rather than its default one.
 """
 import argparse
+import os
+import sys
 
 from signalrcore.hub_connection_builder import HubConnectionBuilder
+
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))     # (-I leaves this folder off the path)
+import ff1_signin  # noqa: E402
+
+CACHE = os.environ.get("F1HUB_FF1_CACHE") or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                                          ".f1cache", "fastf1")
 
 _with_url = HubConnectionBuilder.with_url
 
@@ -22,22 +33,16 @@ def _with_url_no_none(self, url, options=None):
 HubConnectionBuilder.with_url = _with_url_no_none
 
 
-def _no_interactive_sign_in():
-    """Like ff1_worker.no_interactive_sign_in: a browser sign-in would print its URL into the log and wait
-    forever, so without a stored token (or a password login) the recorder uses F1's free feed instead."""
-    import os
-    from fastf1.exceptions import F1AuthError
-    from fastf1.internals import f1account
-    try:
-        method = f1account.get_auth_method()
-    except ValueError:
-        method = "browser"
-    if method == "password" and os.environ.get("F1_USERNAME") and os.environ.get("F1_PASSWORD"):
-        return
+def _negotiate_with_a_timeout():
+    """FastF1's request before connecting has no timeout: if F1's server never answers, the recording hangs
+    before it has begun. Give it one."""
+    import fastf1.livetiming.client as client
+    options = client.requests.options
 
-    def refuse():
-        raise F1AuthError("not signed in to F1 TV (sign in from Explore > FastF1 in F1 Hub)")
-    f1account.token_manager._default_auth_func = refuse
+    def options_with_timeout(url, **kwargs):
+        kwargs.setdefault("timeout", 30)
+        return options(url, **kwargs)
+    client.requests.options = options_with_timeout
 
 
 def main():
@@ -46,7 +51,14 @@ def main():
     p.add_argument("--timeout", type=int, default=1800)
     p.add_argument("--no-auth", action="store_true")
     a = p.parse_args()
-    _no_interactive_sign_in()
+    import fastf1
+    try:
+        os.makedirs(CACHE, exist_ok=True)
+        fastf1.Cache.enable_cache(CACHE)
+    except Exception:
+        pass
+    ff1_signin.install(CACHE)
+    _negotiate_with_a_timeout()
     from fastf1.livetiming.client import SignalRClient
     SignalRClient(a.file, filemode="a", timeout=a.timeout, no_auth=a.no_auth).start()
 

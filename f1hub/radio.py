@@ -11,7 +11,9 @@ import zipfile
 from pathlib import Path
 from urllib.parse import quote, urlparse
 
-CACHE = Path(__file__).resolve().parent.parent / ".f1cache" / "radio"
+from .api import CACHE_DIR, write_atomic
+
+CACHE = CACHE_DIR / "radio"           # clips, their transcripts (.json) and intro lengths (.intro)
 ALLOWED_HOST = "livetiming.formula1.com"
 
 
@@ -33,7 +35,7 @@ def fetch_clip(url):
     req = urllib.request.Request(u._replace(path=quote(u.path, safe="/%")).geturl(), headers={"User-Agent": "f1hub"})
     with urllib.request.urlopen(req, timeout=20) as r:
         data = r.read()
-    f.write_bytes(data)
+    write_atomic(f, data)
     return data
 
 

@@ -1,0 +1,34 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: Python ${{ matrix.python }}
+    # Pinned: Python 3.9 builds exist for Ubuntu 24.04 but not for newer images.
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.9", "3.12", "3.14"]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      # The tests use the standard library only, run offline with a temporary cache, and never read credentials.
+      - name: Unit tests
+        run: python -m unittest discover -s tests
+
+  dashboard:
+    name: Dashboard scripts
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Syntax check
+        run: for f in f1hub/web/*.js; do node --check "$f" || exit 1; done

@@ -3,6 +3,7 @@ from datetime import datetime
 from statistics import median
 
 from . import api
+from .racecontrol import neutralisation, neutralisation_counts
 from .season import _ttl_for
 
 
@@ -72,13 +73,12 @@ class RaceReport:
         """Laps run under a Safety Car or VSC (approximate, from race control)."""
         laps, active = set(), None
         for m in sorted(self.race_control, key=lambda m: m["date"]):
-            msg = (m.get("message") or "").upper()
-            lap = m.get("lap_number")
+            kind, lap = neutralisation(m), m.get("lap_number")
             if lap is None:
                 continue
-            if ("SAFETY CAR DEPLOYED" in msg) or ("VSC DEPLOYED" in msg):
+            if kind in ("sc", "vsc"):
                 active = lap
-            elif active is not None and ("IN THIS LAP" in msg or "VSC ENDING" in msg or "ENDING" in msg):
+            elif active is not None and kind in ("sc_end", "vsc_end"):
                 laps.update(range(active, lap + 1))
                 active = None
         return laps
@@ -88,10 +88,10 @@ class RaceReport:
         for m in sorted(self.race_control, key=lambda m: m["date"]):
             msg = m.get("message") or ""
             up = msg.upper()
-            cat = m.get("category") or ""
-            if cat == "SafetyCar" and ("DEPLOYED" in up or "IN THIS LAP" in up or "ENDING" in up):
+            neutral = neutralisation(m)
+            if neutral in ("sc", "vsc", "sc_end", "vsc_end"):
                 kind = "sc"
-            elif m.get("flag") == "RED":
+            elif neutral == "red" and m.get("category") != "SessionStatus":
                 kind = "red"
             elif "PENALTY" in up and "NO FURTHER" not in up:
                 kind = "penalty"
@@ -105,13 +105,9 @@ class RaceReport:
         return keep
 
     def sc_summary(self):
-        msgs = [(m.get("message") or "").upper() for m in self.race_control]
-        return {
-            "safety_cars": sum("SAFETY CAR DEPLOYED" in m and "VIRTUAL" not in m for m in msgs),
-            "vscs": sum("VIRTUAL SAFETY CAR DEPLOYED" in m or "VSC DEPLOYED" in m for m in msgs),
-            "red_flags": sum(m.get("flag") == "RED" for m in self.race_control),
-            "track_limits": sum("TRACK LIMITS" in m for m in msgs),
-        }
+        n = neutralisation_counts(self.race_control)
+        return {"safety_cars": n["sc"], "vscs": n["vsc"], "red_flags": n["red"],
+                "track_limits": sum("TRACK LIMITS" in (m.get("message") or "").upper() for m in self.race_control)}
 
     # ----------------------------------------------------------------- positions
     def lead_changes(self):

@@ -53,19 +53,33 @@ def _results(sess, rounds, limit=None):
     return dict(_session(sess, rounds), results=out[:limit] if limit else out)
 
 
-def home(season, now=None):
+def _calendar_rounds(sessions, now):
+    """meeting_key -> round number, and how many rounds are done, from the calendar alone - numbered the way
+    Season numbers them (meetings with a race; cancelled ones aren't counted). For while the season loads."""
+    races = sorted((x for x in sessions if x.get("session_name") == "Race"), key=lambda x: x["date_start"])
+    rounds = {x["meeting_key"]: i + 1 for i, x in enumerate(races)}
+    return rounds, len(races), sum(1 for x in races if x.get("date_end") and _dt(x["date_end"]) < now)
+
+
+def home(season, now=None, year=None):
+    """The home page. `season` may be None while it loads: the calendar is enough for most of the page."""
     now = now or datetime.now(timezone.utc)
-    rounds = {r.meeting_key: r.number for r in season.rounds}
+    year = season.year if season else (year or now.year)
     try:
-        NAMES.update({m["meeting_key"]: m.get("meeting_name") for m in api.get("meetings", ttl=6 * 3600, year=season.year)})
-    except api.APIError:
+        NAMES.update({m["meeting_key"]: m.get("meeting_name") for m in api.get("meetings", ttl=6 * 3600, year=year)})
+    except (api.APIError, api.LiveSessionLock):
         pass
-    sessions = [x for x in api.get("sessions", ttl=3600, year=season.year) if not x.get("is_cancelled")]
+    sessions = [x for x in api.get("sessions", ttl=3600, year=year) if not x.get("is_cancelled")]
     sessions.sort(key=lambda x: x["date_start"])
+    if season:
+        rounds = {r.meeting_key: r.number for r in season.rounds}
+        total, done_rounds = len(season.rounds), len(season.completed_rounds())
+    else:
+        rounds, total, done_rounds = _calendar_rounds(sessions, now)
     if not any(_dt(x["date_start"]) > now for x in sessions):     # season over: look at next year's calendar
         try:
-            sessions += [x for x in api.get("sessions", ttl=6 * 3600, year=season.year + 1) if not x.get("is_cancelled")]
-        except api.APIError:
+            sessions += [x for x in api.get("sessions", ttl=6 * 3600, year=year + 1) if not x.get("is_cancelled")]
+        except (api.APIError, api.LiveSessionLock):
             pass
     live = next((x for x in sessions if _dt(x["date_start"]) - LIVE_BEFORE <= now <= _dt(x["date_end"]) + LIVE_AFTER), None)
     nxt = next((x for x in sessions if _dt(x["date_start"]) > now), None)
@@ -77,7 +91,7 @@ def home(season, now=None):
     last_race = next((x for x in reversed(done) if x.get("session_name") == "Race"), None)
     last_any = done[-1] if done else None
     out = {
-        "now": now.isoformat(), "year": season.year,
+        "now": now.isoformat(), "year": year,
         "state": "live" if live else "between" if nxt else "offseason",
         "live": _session(live, rounds) if live else None,
         "next": _session(nxt, rounds) if nxt else None,
@@ -86,7 +100,7 @@ def home(season, now=None):
         "last_race": _results(last_race, rounds) if last_race else None,
         "last_session": None,
         "recent": [_session(x, rounds) for x in reversed(done[-8:])],
-        "rounds": len(season.rounds), "rounds_done": len(season.completed_rounds()),
+        "rounds": total, "rounds_done": done_rounds,
     }
     if last_any and last_any is not last_race and last_any.get("session_type") in ("Qualifying", "Race"):
         out["last_session"] = _results(last_any, rounds, limit=10)     # e.g. qualifying on Saturday night

@@ -9,8 +9,9 @@ from datetime import datetime, timezone
 from statistics import median
 
 from . import api, ff1
+from .racecontrol import neutral_periods, neutralisation_counts
 from .report import _slope
-from .rules import RULES
+from .rules import rules_for
 
 
 def _ts(s):
@@ -65,23 +66,7 @@ def _drivers(src):
 
 
 # ------------------------------------------------------------------------------------------------ neutralised time
-def neutral_periods(rc):
-    """(start, end) epoch spans under SC / VSC / red flag, from race control."""
-    out, cur = [], None
-    for m in sorted((m for m in rc if m.get("date")), key=lambda m: m["date"]):
-        up, t = (m.get("message") or "").upper(), _ts(m["date"])
-        if cur is None and ("SAFETY CAR DEPLOYED" in up or "VSC DEPLOYED" in up or m.get("flag") == "RED"):
-            cur = t
-        elif cur is not None and ("ENDING" in up and ("SAFETY CAR" in up or "VSC" in up) or "IN THIS LAP" in up
-                                  or "SESSION STARTED" in up
-                                  or ("RESUME" in up and "WILL" not in up)):
-            out.append((cur, t + (90 if "IN THIS LAP" in up else 20)))     # SC comes in at the end of the lap
-            cur = None
-    if cur is not None:
-        out.append((cur, float("inf")))
-    return out
-
-
+# (when: racecontrol.neutral_periods)
 def _overlaps(a, b, spans):
     return any(a < e and b > s for s, e in spans)
 
@@ -375,11 +360,7 @@ def _edition(race, now):
     out["sequences"] = seqs.most_common(4)
     if res:
         out["winner_strategy"] = per.get(res[0]["driver_number"])
-    rc = g("race_control")
-    up = [(m.get("message") or "").upper() for m in rc]
-    out["sc"] = sum("SAFETY CAR DEPLOYED" in m and "VIRTUAL" not in m for m in up)
-    out["vsc"] = sum("VIRTUAL SAFETY CAR DEPLOYED" in m or "VSC DEPLOYED" in m for m in up)
-    out["red"] = sum(m.get("flag") == "RED" for m in rc)
+    out.update(neutralisation_counts(g("race_control")))
     try:
         out["overtakes"] = len(g("overtakes"))
     except api.APIError:
@@ -490,7 +471,10 @@ def _norm_openf1(season, upto=None):
         if upto and rnd.number > upto:
             break
 
-        def rows(sess, grid=None):
+        def rows(sess, grid=None, scores=False):
+            # points come from the season's own tally (the table, plus the fastest-lap point where it applied):
+            # OpenF1's points field has errors (2023 Saudi Arabia: 0 points for P2)
+            scored = season.session_points(sess) if scores else {}
             out = []
             for r in season.result(sess):
                 d = season.driver(r["driver_number"], rnd.race)
@@ -500,8 +484,7 @@ def _norm_openf1(season, upto=None):
                     st = "DNF"
                 out.append({"code": d.code, "name": d.name, "team": d.team, "colour": "#" + d.colour,
                             "pos": pos if not st else None, "grid": (grid or {}).get(r["driver_number"]),
-                            "points": None, "status": st})     # from the points table: OpenF1's own field has errors
-                                                                # (2023 Saudi Arabia: 0 points for P2)
+                            "points": scored.get(r["driver_number"]) if scores else None, "status": st})
             return out
         try:
             grid = {g["driver_number"]: g["position"] for g in
@@ -511,8 +494,8 @@ def _norm_openf1(season, upto=None):
             grid = {}
         if not grid:        # OpenF1 often has no starting grid: the qualifying order is the next best thing
             grid = {r["driver_number"]: r["position"] for r in season.result(rnd.quali) if isinstance(r.get("position"), int)}
-        rounds.append({"round": rnd.number, "name": rnd.name, "race": rows(rnd.race, grid),
-                       "sprint": rows(rnd.sprint), "quali": rows(rnd.quali)})
+        rounds.append({"round": rnd.number, "name": rnd.name, "race": rows(rnd.race, grid, scores=True),
+                       "sprint": rows(rnd.sprint, scores=True), "quali": rows(rnd.quali)})
     return rounds
 
 
@@ -537,7 +520,8 @@ def _norm_ergast(data):
 def season_stats(rounds, year, official=None):
     """Form, averages, team-mate head-to-heads and points progression from per-round classifications.
     official: {code: points} - the official totals (with fastest-lap points and penalties) replace the computed ones."""
-    gp, sp = RULES["gp_points"], RULES["sprint_points"]
+    rules = rules_for(year)
+    gp, sp = rules["gp_points"], rules["sprint_points"]
     drv, teams = {}, {}
     for rnd in rounds:
         qpos = {r["code"]: r["pos"] for r in rnd["quali"] if r["pos"]}

@@ -8,9 +8,10 @@ Paid access: set OPENF1_USERNAME + OPENF1_PASSWORD (a token is fetched for you),
 or OPENF1_TOKEN if you already have an access token.
 """
 import collections
-import gzip
+import contextlib
 import hashlib
 import json
+import logging
 import os
 import threading
 import time
@@ -22,6 +23,7 @@ from pathlib import Path
 BASE = "https://api.openf1.org/v1/"
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 CACHE_DIR = Path(os.environ.get("F1HUB_CACHE", PROJECT_DIR / ".f1cache"))
+log = logging.getLogger("f1hub.api")
 
 
 def _load_env_file(path=PROJECT_DIR / ".openf1.env"):
@@ -37,24 +39,30 @@ def _load_env_file(path=PROJECT_DIR / ".openf1.env"):
 
 _load_env_file()
 
-# Every live (uncached) response is also appended here, so sessions can be replayed and studied later.
-# Set F1HUB_RECORD=0 to turn it off.
-RECORD_DIR = None if os.environ.get("F1HUB_RECORD") == "0" else \
-    Path(os.environ.get("F1HUB_RECORD_DIR", PROJECT_DIR / "recordings"))
+# Live OpenF1 data is recorded here per session (f1hub/recordings.py); F1HUB_RECORD=0 turns that off.
+# FastF1 recordings, which you start yourself, go in RECORDINGS/fastf1 either way.
+RECORDINGS = Path(os.environ.get("F1HUB_RECORD_DIR", PROJECT_DIR / "recordings"))
+RECORD_DIR = None if os.environ.get("F1HUB_RECORD") == "0" else RECORDINGS
 
 
-def _record(endpoint, url, params, data):
-    if RECORD_DIR is None:
-        return
+def write_atomic(path, data):
+    """Write text or bytes so that nobody ever reads half a file: a temporary file in the same folder, then
+    os.replace. (Killed mid-write, a plain write left a truncated cache entry that broke every later run.)"""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}-{threading.get_ident()}.part")
     try:
-        day = time.strftime("%Y-%m-%d", time.gmtime())
-        folder = RECORD_DIR / day
-        folder.mkdir(parents=True, exist_ok=True)
-        line = json.dumps({"t": time.time(), "endpoint": endpoint, "params": params, "url": url, "data": data})
-        with gzip.open(folder / f"{endpoint}.jsonl.gz", "at", encoding="utf-8") as f:
-            f.write(line + "\n")
-    except OSError:
-        pass   # recording must never break live timing
+        if isinstance(data, str):
+            tmp.write_text(data, encoding="utf-8")
+        else:
+            tmp.write_bytes(data)
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            tmp.unlink()
+        raise
+
+
 RATE_LIMITS = [(6, 1.0), (60, 60.0)]   # OpenF1 REST: 6 requests/second and 60 requests/minute
 FOREVER = None
 
@@ -100,23 +108,51 @@ def _throttle_once():
 
 
 _token = {"value": os.environ.get("OPENF1_TOKEN"), "expires": float("inf")}
+_login = {"error": None, "at": 0.0}     # the last failed OpenF1 login, if the latest attempt failed
+LOGIN_RETRY = 300                       # s before a failed login is tried again (free access meanwhile)
 offline = False        # True = never hit the network, cache only
 
 
 def _auth_token():
+    """The OpenF1 access token, or None for free access. A failed login (wrong password, network down) used to
+    fail every request - even ones a cached copy could answer - and asked OpenF1 for a token again each time.
+    Now it's free access, and the cache, until the login is tried again LOGIN_RETRY seconds later."""
     user, pw = os.environ.get("OPENF1_USERNAME"), os.environ.get("OPENF1_PASSWORD")
     if user and pw and (not _token["value"] or time.time() > _token["expires"]):
+        if _login["error"] and time.time() - _login["at"] < LOGIN_RETRY:
+            return None
         body = urllib.parse.urlencode({"username": user, "password": pw}).encode()
         req = urllib.request.Request("https://api.openf1.org/token", data=body,
                                      headers={"Content-Type": "application/x-www-form-urlencoded"})
         try:
             with urllib.request.urlopen(req, timeout=30) as r:
                 tok = json.loads(r.read().decode())
+            value, expires = tok["access_token"], int(tok.get("expires_in", 3600))
         except urllib.error.HTTPError as e:
-            raise APIError(f"OpenF1 login failed (HTTP {e.code}) - check OPENF1_USERNAME/PASSWORD") from None
-        _token["value"] = tok["access_token"]
-        _token["expires"] = time.time() + int(tok.get("expires_in", 3600)) - 120
+            with contextlib.closing(e):
+                pass
+            why = ("OpenF1 turned down OPENF1_USERNAME / OPENF1_PASSWORD" if e.code in (400, 401, 403)
+                   else "OpenF1's login answered") + f" (HTTP {e.code})"
+            return _login_failed(why)
+        except (urllib.error.URLError, OSError, ValueError, KeyError, TypeError) as e:
+            return _login_failed(f"couldn't log in to OpenF1 ({getattr(e, 'reason', None) or e})")
+        _login.update(error=None, at=time.time())
+        _token["value"] = value
+        _token["expires"] = time.time() + expires - 120
     return _token["value"]
+
+
+def _login_failed(why):
+    if _login["error"] != why:
+        log.warning("%s - using free access, trying again in %d minutes", why, LOGIN_RETRY // 60)
+    _login.update(error=why, at=time.time())
+    _token["value"] = None
+    return None
+
+
+def login_error():
+    """Why the paid OpenF1 login isn't in use right now, or None."""
+    return _login["error"]
 
 
 def authenticated():
@@ -126,6 +162,28 @@ def authenticated():
 
 def _cache_path(url):
     return CACHE_DIR / (hashlib.sha1(url.encode()).hexdigest() + ".json")
+
+
+def _read_cached(path):
+    """The cached {"url", "fetched", "data"} at path, or None if there is none. A damaged entry counts as missing:
+    it's fetched again and replaced."""
+    try:
+        cached = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError):
+        cached = None
+    if isinstance(cached, dict) and "data" in cached and isinstance(cached.get("fetched"), (int, float)):
+        return cached
+    log.warning("damaged cache entry %s - it will be fetched again", path.name)
+    return None
+
+
+def _write_cached(path, url, data):
+    try:
+        write_atomic(path, json.dumps({"url": url, "fetched": time.time(), "data": data}))
+    except OSError as e:          # disk full, read-only folder...: the data is still good, just not kept
+        log.warning("could not cache %s: %s", url, e)
 
 
 def _build_url(endpoint, params):
@@ -145,16 +203,17 @@ def _build_url(endpoint, params):
     return BASE + endpoint + ("?" + "&".join(parts) if parts else "")
 
 
-def get(endpoint, ttl=FOREVER, cache=True, fetched_after=None, **params):
+def get(endpoint, ttl=FOREVER, cache=True, fetched_after=None, record=None, **params):
     """GET an endpoint. ttl: seconds a cached copy stays fresh (None = forever).
     fetched_after: epoch seconds - a cached copy saved before then is stale whatever the ttl
     (e.g. one saved while the session was still running).
-    cache=False: always hit the network and store nothing (live timing)."""
+    cache=False: always hit the network and cache nothing (live timing); record(endpoint, url, params, data)
+    then gets each response (recordings.SessionRecording.rest)."""
     url = _build_url(endpoint, params)
     path = _cache_path(url)
     stale = None
-    if cache and path.exists():
-        cached = json.loads(path.read_text())
+    cached = _read_cached(path) if cache else None
+    if cached is not None:
         fresh = ttl is FOREVER or time.time() - cached["fetched"] < ttl
         if offline or (fresh and (fetched_after is None or cached["fetched"] >= fetched_after)):
             return cached["data"]
@@ -174,7 +233,8 @@ def get(endpoint, ttl=FOREVER, cache=True, fetched_after=None, **params):
                 data = json.loads(r.read().decode())
             break
         except urllib.error.HTTPError as e:
-            body = e.read().decode(errors="replace")
+            with contextlib.closing(e):
+                body = e.read().decode(errors="replace")
             if e.code == 404:          # OpenF1 answers 404 for "no results"
                 data = []
                 break
@@ -186,9 +246,11 @@ def get(endpoint, ttl=FOREVER, cache=True, fetched_after=None, **params):
             if e.code == 401 and "live" in body.lower():
                 if stale is not None:
                     return stale
+                hint = (f"The paid login isn't working: {login_error()}." if login_error() else
+                        "Paid access (OPENF1_USERNAME / OPENF1_PASSWORD in .openf1.env) works during sessions.")
                 raise LiveSessionLock(
                     "A live F1 session is in progress, so OpenF1 has locked free access until it ends.\n"
-                    "Cached data still works - try again after the session, or set OPENF1_USERNAME/OPENF1_PASSWORD.") from None
+                    f"Cached data still works - try again after the session. {hint}") from None
             raise APIError(f"HTTP {e.code} for {url}: {body[:200]}") from None
         except urllib.error.URLError as e:
             if stale is not None:
@@ -202,18 +264,18 @@ def get(endpoint, ttl=FOREVER, cache=True, fetched_after=None, **params):
     if isinstance(data, dict) and "detail" in data:
         raise APIError(f"{url}: {data['detail']}")
     if not cache:
-        _record(endpoint, url, {k: v for k, v in params.items()}, data)
+        if record is not None:
+            record(endpoint, url, dict(params), data)
         return data
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"url": url, "fetched": time.time(), "data": data}))
+    _write_cached(path, url, data)
     return data
 
 
 def get_external(url, ttl=24 * 3600):
     """Fetch a JSON URL OpenF1 links to (e.g. meetings.circuit_info_url), cached like everything else."""
     path = _cache_path(url)
-    if path.exists():
-        cached = json.loads(path.read_text())
+    cached = _read_cached(path)
+    if cached is not None:
         if offline or time.time() - cached["fetched"] < ttl:
             return cached["data"]
     if offline:
@@ -224,7 +286,6 @@ def get_external(url, ttl=24 * 3600):
             data = json.loads(r.read().decode())
     except (urllib.error.URLError, ValueError) as e:
         raise APIError(f"Could not fetch {url}: {e}") from None
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"url": url, "fetched": time.time(), "data": data}))
+    _write_cached(path, url, data)
     return data
 
