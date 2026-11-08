@@ -3305,10 +3305,8 @@ async function xFF1() {
         <p class="xnote">Saves everything F1's live-timing feed sends during a session (timing, positions, car telemetry, race control, weather) to
           <code>recordings/fastf1/</code>. FastF1 can't process it in real time; play it back afterwards, or mid-session to see what has been recorded so far.
           It stops by itself 30 minutes after the feed goes quiet.</p>
-        <p class="xnote"><b>F1 TV Pro login:</b> ${r.credentials ? `✅ <code>F1_USERNAME</code> / <code>F1_PASSWORD</code> are set` : r.auth_method === "browser" ? "✅ browser sign-in (<code>FASTF1_AUTH_METHOD=browser</code>)" :
-          `not set - recording uses F1's free feed, which leaves out car telemetry and positions in recent seasons. Add <code>F1_USERNAME=…</code> and <code>F1_PASSWORD=…</code>
-           to <code>.openf1.env</code> (or set <code>FASTF1_AUTH_METHOD=browser</code> to sign in in your browser), then restart F1 Hub.`}
-          ${r.auth_failed ? `<br><span class="down">⚠ Sign-in failed - recording without authentication.</span>` : ""}</p>
+        ${xTVLogin(f, r)}
+        ${r.auth_failed ? `<p class="xnote down">Sign-in failed - recording without authentication.</p>` : ""}
         ${(r.log || []).length ? `<pre class="log">${esc(r.log.join("\n"))}</pre>` : ""}
       </div></div>
       <div class="card"><h2>Recordings <span class="sub">newest first</span></h2>${(recs.recordings || []).length ? `<table><tbody>${recs.recordings.map(x => `<tr>
@@ -3322,13 +3320,54 @@ async function xFF1() {
         <p class="xnote">What FastF1 adds:</p>
         <ul class="xnote" style="padding-left:18px;margin:0">
           <li><b>2018-2022</b> in replays, analysis and the telemetry lab (F1's archive - OpenF1 starts in 2023)</li>
-          <li>${f.login ? "✅ F1 account login set: FastF1 can also read 2023 onwards" : "<b>2023 onwards needs an F1 account login</b> (F1 TV): F1's archive only serves recent seasons when signed in - see the recorder card for how to set it"}</li>
+          <li>${f.login ? "Signed in to F1 TV: FastF1 can also read 2023 onwards" : "<b>2023 onwards needs an F1 TV login</b>: F1's archive only serves recent seasons when signed in - use <i>Sign in to F1 TV</i> on the recorder card"}</li>
           <li><b>Smoother lap telemetry</b> in the lab: car and position data merged on one timeline, distance in metres, RPM and DRS</li>
           <li><b>A stand-in while OpenF1 is locked</b> during a live session (free accounts): replays and analysis of past sessions keep working</li>
           <li><b>Recording</b> the live feed with an F1 TV Pro login, to play back with full telemetry</li>
           <li>Season stats before 2023, from the Jolpica-Ergast archive</li></ul>
         <p class="xnote">FastF1 downloads into <code>.f1cache/fastf1/</code>: a race with telemetry is ~100 MB the first time, then loads in seconds.</p></div></div>`;
   });
+}
+/* F1 TV sign-in for FastF1: the browser method runs on the server (FastF1's CLI) and hands us the link to open */
+function xTVLogin(f, r) {
+  const a = f.auth || {}, s = f.sign_in || {};
+  const until = a.expires_at ? new Date(a.expires_at * 1000).toLocaleDateString() : "";
+  let body;
+  if (s.state === "waiting") {
+    body = `waiting for you to sign in.
+      ${s.url ? `<a href="${esc(s.url)}" target="_blank" rel="noopener">Open the F1 sign-in page</a>` : "Starting…"}
+      <button class="btn" onclick="xTVAction('cancel')">Cancel</button>
+      <br>Sign in with your F1 TV account on that page. It needs FastF1's browser add-on, which the page links to; once it's
+      installed, sign in again there. This card updates by itself when it's done.`;
+  } else if (a.signed_in) {
+    body = `signed in${a.product ? ` (${esc(a.product)})` : ""}${until ? `, valid until ${esc(until)}` : ""}.
+      FastF1 can read 2023 onwards, and recordings get the full feed.
+      <button class="btn" onclick="xTVAction('signout')">Sign out</button>`;
+  } else if (r.credentials && r.auth_method !== "browser") {
+    body = `<code>F1_USERNAME</code> / <code>F1_PASSWORD</code> are set; FastF1 signs in with them when it needs to.`;
+  } else {
+    body = `${a.expired ? "your sign-in has expired" : "not signed in"}. Without it, recordings use F1's free feed (no car telemetry or
+      positions in recent seasons) and FastF1 can't read 2023 onwards.
+      <button class="btn primary" onclick="xTVAction('start')" ${f.available ? "" : "disabled"}>Sign in to F1 TV</button>
+      ${s.state === "failed" ? `<br><span class="down">${esc(s.error || "Sign-in failed")}</span>` : ""}
+      <br>Or put <code>F1_USERNAME=…</code> and <code>F1_PASSWORD=…</code> in <code>.openf1.env</code> and restart F1 Hub.`;
+  }
+  clearTimeout(XP.tvPoll);
+  if (s.state === "waiting") XP.tvPoll = setTimeout(() => { if (activeTab === "explore" && XP.view === "ff1") xFF1(); }, 2000);
+  return `<p class="xnote"><b>F1 TV Pro login:</b> ${body}</p>`;
+}
+async function xTVAction(action) {
+  const w = action === "start" ? window.open("", "_blank") : null;   // opened now, so popup blockers allow it
+  try {
+    const res = await xJSON("/api/ff1/login?action=" + action);
+    const url = res.url || (res.sign_in || {}).url;
+    if (w) { if (url) w.location = url; else w.close(); }
+    if (action === "start" && res.state === "failed") toast("error", "F1 TV sign-in", res.error || "Sign-in failed", "#ff5050");
+  } catch (e) {
+    if (w) w.close();
+    toast("error", "F1 TV sign-in", e.message, "#ff5050");
+  }
+  xFF1();
 }
 function xAnalyseKey(key) {
   XP.key = String(key); store.set("xsession", XP.key);

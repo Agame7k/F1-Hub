@@ -127,10 +127,9 @@ def load(ref, telemetry=True):
     if not ok:
         msg = ("This recording has no lap timing yet - record while a session is running (it can be played back part-way through)"
                if ref.get("livedata") else "F1's live-timing archive returned no data for this session")
-        if int(ref["year"]) >= 2023 and not ref.get("livedata") and not (os.environ.get("F1_USERNAME") and os.environ.get("F1_PASSWORD")) \
-                and os.environ.get("FASTF1_AUTH_METHOD") != "browser":
-            msg += (" - from 2023 on F1 only serves it with an F1 account login (F1 TV): put F1_USERNAME and F1_PASSWORD"
-                    " in .openf1.env and restart F1 Hub")
+        if int(ref["year"]) >= 2023 and not ref.get("livedata") and not auth_status()["signed_in"]:
+            msg += (" - from 2023 on F1 only serves it with an F1 TV login: sign in from Explore > FastF1, or put"
+                    " F1_USERNAME and F1_PASSWORD in .openf1.env and restart F1 Hub")
         raise RuntimeError(msg)
     LOADED[k] = s
     while len(LOADED) > KEEP:
@@ -465,8 +464,46 @@ COMMANDS = {
     "laps": lambda a: lap_list(a["ref"]),
     "results": lambda a: results(a["ref"]),
     "season_results": lambda a: season_results(a["year"]),
+    "auth": lambda a: auth_status(),
     "ping": lambda a: {"pong": True},
 }
+
+
+# ------------------------------------------------------------------------------------------------ F1 TV sign-in
+def no_interactive_sign_in():
+    """Never start a sign-in from this worker. FastF1's browser sign-in prints a URL (into our log, where nobody
+    sees it) and then waits forever, which hangs every request. The dashboard runs the sign-in instead
+    (ff1.LOGIN) and FastF1 stores the token, which this worker then reads from disk. The password method still
+    signs in here when F1_USERNAME / F1_PASSWORD are set, since that needs no interaction."""
+    try:
+        from fastf1.exceptions import F1AuthError
+        from fastf1.internals import f1account
+    except ImportError:
+        return
+    try:
+        method = f1account.get_auth_method()
+    except ValueError:
+        method = "browser"
+    if method == "password" and os.environ.get("F1_USERNAME") and os.environ.get("F1_PASSWORD"):
+        return
+
+    def refuse():
+        raise F1AuthError("not signed in to F1 TV (sign in from Explore > FastF1 in F1 Hub)")
+    f1account.token_manager._default_auth_func = refuse
+
+
+def auth_status():
+    """The F1 TV token FastF1 has stored on disk, without signing in."""
+    from fastf1.internals.f1account.tokens import TokenManager
+    tok = TokenManager(auth_func=None).get_stored()
+    if tok is None:
+        return {"signed_in": False, "expired": False}
+    try:
+        claims = tok.claims
+    except Exception:
+        claims = {}
+    return {"signed_in": tok.is_valid(), "expired": not tok.is_valid(), "expires_at": tok.expires_at,
+            "subscription": claims.get("SubscriptionStatus"), "product": claims.get("SubscribedProduct")}
 
 
 def lap_list(ref):
@@ -490,6 +527,7 @@ def main():
     except Exception:
         pass
     fastf1.set_log_level("WARNING")
+    no_interactive_sign_in()
     print(json.dumps({"ready": True, "version": fastf1.__version__}), file=OUT, flush=True)
     for line in sys.stdin:
         try:

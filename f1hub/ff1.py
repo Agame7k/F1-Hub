@@ -156,8 +156,9 @@ def status():
     if not VENV_PY.exists():
         return {"available": False, "error": "FastF1 isn't installed: .venv/bin/pip install fastf1", "recorder": RECORDER.status()}
     ok = available()
+    tv = auth() if ok else {"signed_in": False}
     return {"available": ok, "version": _probe["version"], "error": None if ok else _probe["error"],
-            "login": _credentials() or os.environ.get("FASTF1_AUTH_METHOD") == "browser",
+            "login": _credentials() or tv["signed_in"], "auth": tv, "sign_in": LOGIN.status(),
             "busy": HEAVY.busy, "loading": dict(LOADING) if LOADING else None, "recorder": RECORDER.status()}
 
 
@@ -359,9 +360,118 @@ def lap_trace(key, driver, lap="best", before=None, openf1_session=None):
         LOADING.clear()
 
 
-# ------------------------------------------------------------------------------------------------ recorder
+# ------------------------------------------------------------------------------------------------ F1 TV sign-in
 def _credentials():
     return bool(os.environ.get("F1_USERNAME") and os.environ.get("F1_PASSWORD"))
+
+
+_auth = {"at": 0, "data": None}
+
+
+def auth(force=False):
+    """The F1 TV token FastF1 has stored (it's shared by the workers, the recorder and FastF1's own CLI).
+    Cached for 30 s; never signs in."""
+    if force or not _auth["data"] or time.time() - _auth["at"] > 30:
+        try:
+            _auth["data"] = QUICK.call("auth", timeout=60)
+        except FF1Error as e:
+            _auth["data"] = {"signed_in": False, "error": str(e)}
+        _auth["at"] = time.time()
+    return _auth["data"]
+
+
+class Login:
+    """FastF1's browser sign-in (python -m fastf1 auth f1tv --authenticate --method browser), run for the dashboard.
+
+    FastF1 starts a small server on 127.0.0.1, prints a link to f1login.fastf1.dev and waits until that page
+    (with FastF1's browser add-on) hands back the F1 TV token, which FastF1 then stores for every process to use.
+    Here the link is picked out of its output and shown on the page. Gives up after LOGIN_TIMEOUT."""
+    URL_RE = re.compile(r"https://f1login\.fastf1\.dev\S*")
+    TIMEOUT = 600
+
+    def __init__(self):
+        self.proc = None
+        self.url = None
+        self.started = None
+        self.lines = []
+        self.error = None
+
+    def start(self):
+        if self.running():
+            return self.status()
+        if not VENV_PY.exists():
+            raise FF1Error("FastF1 isn't installed: .venv/bin/pip install fastf1")
+        self.url, self.error, self.lines = None, None, []
+        cmd = [str(VENV_PY), "-I", "-u", "-m", "fastf1", "auth", "f1tv", "--authenticate", "--method", "browser"]
+        self.proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                     text=True, env=dict(os.environ, PYTHONNOUSERSITE="1"), start_new_session=True)
+        self.started = time.time()
+        threading.Thread(target=self._read, args=(self.proc,), daemon=True).start()
+        deadline = time.time() + 15            # the link normally appears within a second
+        while time.time() < deadline and not self.url and self.running():
+            time.sleep(0.1)
+        return self.status()
+
+    def _read(self, proc):
+        for line in proc.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            self.lines = (self.lines + [line[:300]])[-5:]
+            m = self.URL_RE.search(line)
+            if m:
+                self.url = m.group(0)
+        proc.wait()
+        _auth["at"] = 0                       # re-read the stored token on the next status
+
+    def cancel(self):
+        if self.running():
+            try:
+                os.killpg(self.proc.pid, signal.SIGTERM)
+                self.proc.wait(5)
+            except (OSError, subprocess.TimeoutExpired):
+                self.proc.kill()
+            self.error = "Sign-in cancelled"
+        return self.status()
+
+    def running(self):
+        return bool(self.proc and self.proc.poll() is None)
+
+    def status(self):
+        if self.proc is None:
+            return {"state": "idle"}
+        if self.running():
+            if time.time() - self.started > self.TIMEOUT:
+                self.cancel()
+                self.error = f"Sign-in timed out after {self.TIMEOUT // 60} minutes"
+            else:
+                return {"state": "waiting", "url": self.url, "started": self.started}
+        if self.proc.returncode == 0 and not self.error:
+            return {"state": "done"}
+        msg = self.error or next((l for l in reversed(self.lines) if "failed" in l.lower() or "error" in l.lower()),
+                                 self.lines[-1] if self.lines else f"exit {self.proc.returncode}")
+        return {"state": "failed", "error": msg}
+
+
+LOGIN = Login()
+
+
+def sign_out():
+    """Remove FastF1's stored F1 TV token."""
+    if LOGIN.running():
+        LOGIN.cancel()
+    subprocess.run([str(VENV_PY), "-I", "-m", "fastf1", "auth", "f1tv", "--clear"], capture_output=True, timeout=60,
+                   env=dict(os.environ, PYTHONNOUSERSITE="1"))
+    LOGIN.proc = None
+    return {"auth": auth(force=True), "sign_in": LOGIN.status()}
+
+
+# ------------------------------------------------------------------------------------------------ recorder
+def _record_auth():
+    """How a recording would sign in: "password", "browser" (a stored F1 TV token) or "none" (the free feed)."""
+    if os.environ.get("FASTF1_AUTH_METHOD") != "browser" and _credentials():
+        return "password"
+    return "browser" if auth().get("signed_in") else "none"
 
 
 class Recorder:
@@ -385,8 +495,7 @@ class Recorder:
             raise FF1Error("FastF1 isn't installed: .venv/bin/pip install fastf1")
         REC_DIR.mkdir(parents=True, exist_ok=True)
         now = datetime.now(timezone.utc)
-        meta = {"started": now.isoformat(), "auth": "browser" if os.environ.get("FASTF1_AUTH_METHOD") == "browser"
-                else "password" if _credentials() else "none"}
+        meta = {"started": now.isoformat(), "auth": _record_auth()}
         if session:
             meta.update({k: session.get(k) for k in ("session_key", "session_name", "date_start", "date_end", "year",
                                                      "location", "country_name", "meeting_key")})
@@ -427,6 +536,8 @@ class Recorder:
     def status(self):
         out = {"running": self.running(), "credentials": _credentials(),
                "auth_method": os.environ.get("FASTF1_AUTH_METHOD") or ("password" if _credentials() else None)}
+        if self.meta:
+            out["auth"] = self.meta.get("auth")
         if self.file:
             size = self.file.stat().st_size if self.file.exists() else 0
             out.update(file=self.file.name, bytes=size, started=self.started,

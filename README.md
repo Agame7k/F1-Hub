@@ -28,11 +28,11 @@ python3 -m f1hub live     # the same live timing in the terminal
 
 | | Free (no login) | Paid OpenF1 | + F1 TV Pro login (FastF1) |
 |---|---|---|---|
-| Past seasons 2023+: CLI, replays, Explore | ✅ (not while a session is live*) | ✅ | ✅ |
-| Live timing and the real-time MQTT stream | | ✅ | |
-| 2018-2022 replays, analysis, season stats | with FastF1 installed | with FastF1 installed | ✅ |
-| FastF1 archive for 2023+ (smoother telemetry, fallback while OpenF1 is locked) | | | ✅ |
-| Full live-timing recordings, including car telemetry and positions | | | ✅ |
+| Past seasons 2023+: CLI, replays, Explore | Yes (not while a session is live*) | Yes | Yes |
+| Live timing and the real-time MQTT stream | | Yes | |
+| 2018-2022 replays, analysis, season stats | with FastF1 installed | with FastF1 installed | Yes |
+| FastF1 archive for 2023+ (smoother telemetry, fallback while OpenF1 is locked) | | | Yes |
+| Full live-timing recordings, including car telemetry and positions | | | Yes |
 
 \* While a live F1 session is running, OpenF1 locks all free access, past seasons included, until it ends. Data you've already fetched still works from the cache, and with FastF1 + an F1 TV login, past sessions switch over to FastF1.
 
@@ -42,9 +42,9 @@ python3 -m f1hub live     # the same live timing in the terminal
 
 | Tab | Highlights |
 |---|---|
-| **🏠 Home** | Countdown to the next session, the weekend in your local time (.ics export), the latest result (spoiler-safe), one-click replays |
+| **Home** | Countdown to the next session, the weekend in your local time (.ics export), the latest result (spoiler-safe), one-click replays |
 | **Live timing** | Timing tower with sector colours, gaps, tyres, pits, live championship points, mini map, weather. Qualifying drop zones and a provisional grid with penalties applied |
-| **Race control** | Every message tagged and filterable, marshal-sector flag board, SC/VSC/red-flag timeline, per-driver stewarding record, penalty points and reprimands, 📄 the exact FIA rule behind each penalty |
+| **Race control** | Every message tagged and filterable, marshal-sector flag board, SC/VSC/red-flag timeline, per-driver stewarding record, penalty points and reprimands, the exact FIA rule behind each penalty |
 | **Red flag panel** | Suspension timer, restart countdown and order, reduced-points title outcome |
 | **Track map** | Official circuit outline with marshal sectors coloured by live flags, cars animated from location data, a ghost of the fastest lap |
 | **Insights** | Battles, pit-now rejoin predictor, race pace, lap chart, theoretical best laps, speed traps |
@@ -53,11 +53,11 @@ python3 -m f1hub live     # the same live timing in the terminal
 | **Driver telemetry** | Live speed / gear / RPM / throttle / brake, head-to-head lap compare |
 | **Team radio** | Playable clips, downloads, local speech-to-text with searchable transcripts and alert words |
 | **Championship / Calendar** | Standings with who's still in contention, points progression, a title simulator |
-| **🔬 Explore** | Session analysis, a telemetry lab for any two laps, season stats from 2018, circuit previews, FastF1 recordings |
+| **Explore** | Session analysis, a telemetry lab for any two laps, season stats from 2018, circuit previews, FastF1 recordings |
 
-Plus: ⚠ crash detection, alerts (with optional sound and desktop notifications), a delay setting to match your TV, a **no-spoiler mode**, full replays on a virtual clock (1–10×), a mini picture-in-picture tower, TV layouts and keyboard shortcuts (`?`).
+Plus: crash detection, alerts (with optional sound and desktop notifications), a delay setting to match your TV, a **no-spoiler mode**, full replays on a virtual clock (1–10×), a mini picture-in-picture tower, TV layouts and keyboard shortcuts (`?`).
 
-**→ The full reference, covering every tab, the real-time stream, replays, FastF1 and shortcuts, is in [docs/dashboard.md](docs/dashboard.md).**
+**The full reference, covering every tab, the real-time stream, replays, FastF1 and shortcuts, is in [docs/dashboard.md](docs/dashboard.md).**
 
 ## Command line
 
@@ -121,7 +121,7 @@ Everything works without these; each one unlocks a feature.
 | FastF1 | `python3 -m venv .venv && .venv/bin/pip install fastf1` | 2018-2022 seasons, smoother lap telemetry, a fallback while OpenF1 is locked, live-timing recordings ([details](docs/dashboard.md#fastf1-and-recording-the-live-timing-feed)) |
 | faster-whisper | `python3 -m venv .venv && .venv/bin/pip install faster-whisper` | Local, private team-radio transcripts (the model downloads ~250 MB on first run) |
 | ffmpeg | `sudo apt install ffmpeg` | Decoding radio audio for transcription |
-| poppler | `sudo apt install poppler-utils` | Reading FIA decision and regulation PDFs (📄 Rule, penalty points) |
+| poppler | `sudo apt install poppler-utils` | Reading FIA decision and regulation PDFs (the Rule button, penalty points) |
 
 FastF1 and Whisper both run in the project's `.venv` as separate worker processes, so the main app stays dependency-free.
 
@@ -143,7 +143,7 @@ Restart F1 Hub after changing them. All the settings:
 | `OPENF1_USERNAME`, `OPENF1_PASSWORD` | | Paid OpenF1 login; swapped for an access token automatically |
 | `OPENF1_TOKEN` | | Use an OpenF1 token you already have instead |
 | `F1_USERNAME`, `F1_PASSWORD` | | F1 TV Pro login for FastF1 (2023+ archive, full recordings) |
-| `FASTF1_AUTH_METHOD` | | Set to `browser` to sign in to F1 TV through your browser instead |
+| `FASTF1_AUTH_METHOD` | | Set to `browser` to ignore `F1_USERNAME`/`F1_PASSWORD` and use only the browser sign-in (Explore > FastF1 > *Sign in to F1 TV*) |
 | `F1HUB_RECORD` | on | `0` turns off saving live API responses and the MQTT stream |
 | `F1HUB_RECORD_DIR` | `recordings/` | Where recordings go |
 | `F1HUB_CACHE` | `.f1cache/` | Where API responses, FIA PDFs and transcripts are cached |

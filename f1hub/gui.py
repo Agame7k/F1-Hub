@@ -920,6 +920,18 @@ def serve(season, session_key="latest", interval=10, port=8765, open_browser=Tru
                     self._json(stats(_ff1_year(clean_year(q.get("year"), ff1.FIRST_YEAR)) or feed.season.year))
                 elif path == "/api/ff1/status":
                     self._json(ff1.status())
+                elif path == "/api/ff1/login":
+                    action = q.get("action")
+                    if action == "start":
+                        self._json(ff1.LOGIN.start())
+                    elif action == "cancel":
+                        self._json(ff1.LOGIN.cancel())
+                    elif action == "signout":
+                        self._json(ff1.sign_out())
+                    elif action == "status":
+                        self._json({"sign_in": ff1.LOGIN.status(), "auth": ff1.auth()})
+                    else:
+                        raise BadRequest("action must be start, cancel, signout or status")
                 elif path == "/api/ff1/recordings":
                     self._json({"recordings": ff1.recordings(), "recorder": ff1.RECORDER.status()})
                 elif path == "/api/ff1/record":
