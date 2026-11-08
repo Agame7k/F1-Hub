@@ -225,9 +225,9 @@
   .podium { display: flex; align-items: flex-end; gap: 10px; margin-top: 28px; }
   .podium .step { width: clamp(90px, 13vw, 150px); display: flex; flex-direction: column; align-items: center; }
   .podium .blk { width: 100%; border-radius: 6px 6px 0 0; display: flex; align-items: flex-start; justify-content: center; padding-top: 8px;
-                 font-size: 34px; font-weight: 900; color: #fff; transform-origin: bottom; transform: scaleY(0); animation: rise .8s cubic-bezier(.2,1.2,.4,1) forwards; }
+                 font-size: 34px; font-weight: 900; color: #fff; transform-origin: bottom; transform: scaleY(0); animation: podiumrise .8s cubic-bezier(.2,1.2,.4,1) forwards; }
   .podium .lbl { font-weight: 800; margin-bottom: 6px; opacity: 0; animation: up .5s forwards; }
-  @keyframes rise { to { transform: scaleY(1); } }
+  @keyframes podiumrise { to { transform: scaleY(1); } }
   .c-hint { position: absolute; bottom: 18px; left: 0; right: 0; text-align: center; color: #fff6; font-size: 12px; }
   /* champion */
   #celeb.gold { background: radial-gradient(ellipse at 50% 40%, #3a2a05f0 0%, #0b0803fa 65%); }

@@ -9,6 +9,10 @@ seconds at the 80 km/h limiter. Location units are ~0.11 m (505 units/s ~ 205 km
   stopped  a slow stop (beached, mechanical): only reported once race control backs it up - a yellow in that
            marshal sector, red flag, SC/VSC, or a message naming the car - because a car parked in the pit
            lane looks the same.
+  pits     a car that rolled down the pit lane and has not left it long after a pit stop would be over. That is a
+           retirement (or a long repair), not an incident: parked_in_pits() hands it to the retirement check.
+           It is only listed as a stopped car if race control puts a yellow out in that very marshal sector
+           or names the car.
 """
 import math
 import re
@@ -21,11 +25,12 @@ SLOW = 40                # ~16 km/h
 MOVING = 100             # ~40 km/h
 REJOIN = 250             # ~100 km/h, held for 2 s = driving off again
 DECEL_WINDOW = 6.0       # s from last fast sample to first slow one (a slide through gravel takes a few seconds)
-LIMITER = (150, 240)     # ~60-100 km/h: the pit-lane speed limit
+LIMITER = (135, 240)     # ~55-100 km/h: the pit-lane speed limit (60 km/h at Monaco, Singapore, ... is ~148)
 LIMITER_HOLD = 2.0       # s steady at limiter speed = in the pit lane, not a crash
 SLOW_HOLD = 1.5          # s below SLOW before it counts
 STOPPED_HOLD = 8.0       # s below SLOW for a slow stop
 SHOW_FOR = 600           # s an incident stays in the list
+PIT_HOLD = 30.0          # s stationary in the pit lane: longer than any stop, penalty or stop-go
 
 
 def _iso(t):
@@ -33,7 +38,7 @@ def _iso(t):
 
 
 class Car:
-    __slots__ = ("pts", "last_fast", "last_moving", "slow_since", "fast_since", "peak", "event", "limiter_since", "pit_like")
+    __slots__ = ("pts", "last_fast", "last_moving", "slow_since", "fast_since", "peak", "event", "limiter_since", "pit_like", "pit_parked")
 
     def __init__(self):
         self.pts = deque(maxlen=80)      # (t, x, y)
@@ -42,6 +47,7 @@ class Car:
         self.event = None                # the car's open incident
         self.limiter_since = None        # steady at pit-limiter speed since...
         self.pit_like = None             # ...and when that lasted long enough to look like the pit lane
+        self.pit_parked = None           # stationary in the pit lane since...
 
 
 class IncidentDetector:
@@ -76,7 +82,7 @@ class IncidentDetector:
         if v <= SLOW:
             c.slow_since = c.slow_since or t
         elif v > 2 * SLOW:
-            c.slow_since = None
+            c.slow_since = c.pit_parked = None
         c.fast_since = (c.fast_since or t) if v >= REJOIN else None
 
         e = c.event
@@ -86,10 +92,18 @@ class IncidentDetector:
                 e["kind"] = "spin"          # stopped and drove off: a spin, not a crash
             c.event = None
             return
-        if e or suppressed or not c.slow_since or t - c.slow_since < SLOW_HOLD:
+        if e or not c.slow_since or t - c.slow_since < SLOW_HOLD:
             return
         stop_t = c.slow_since
-        pitlane = c.pit_like is not None and c.last_fast is not None and c.pit_like > c.last_fast
+        pitlane = c.pit_like is not None and (c.last_fast is None or c.pit_like > c.last_fast)
+        if pitlane:
+            c.pit_parked = c.pit_parked or stop_t
+        if suppressed:
+            return
+        if pitlane:
+            if t - stop_t >= PIT_HOLD:
+                c.event = self._new(n, "stopped", stop_t, x, y, None, needs_confirmation=True, pits=True)
+            return
         if c.last_fast and 0 <= stop_t - c.last_fast <= DECEL_WINDOW and not pitlane:
             top = sorted((s for ts, s in c.peak if stop_t - 6 <= ts <= stop_t), reverse=True)[:5]
             peak = top[len(top) // 2] if top else FAST        # median of the top readings: timestamp jitter makes spikes
@@ -97,16 +111,20 @@ class IncidentDetector:
         elif t - stop_t >= STOPPED_HOLD and c.last_moving and stop_t - c.last_moving <= 15 and not pitlane:
             c.event = self._new(n, "stopped", stop_t, x, y, None, needs_confirmation=True)
 
-    def _new(self, n, kind, t, x, y, peak, needs_confirmation=False):
+    def _new(self, n, kind, t, x, y, peak, needs_confirmation=False, pits=False):
         e = {"id": self._next, "number": n, "kind": kind, "state": "stopped", "t": t, "at": _iso(t), "x": x, "y": y,
              "speed_before": round(peak * KMH / 10) * 10 if peak else None, "needs_confirmation": needs_confirmation,
-             "rejoined_at": None}
+             "rejoined_at": None, "pits": pits}
         self._next += 1
         self.events.append(e)
         del self.events[:-20]
         return e
 
     # ------------------------------------------------------------------ reading
+    def parked_in_pits(self, now, hold=90.0):
+        """{number: since} for cars that have sat still in the pit lane for `hold` s or more (likely retired)."""
+        return {n: c.pit_parked for n, c in self.cars.items() if c.pit_parked is not None and now - c.pit_parked >= hold}
+
     def snapshot(self, now, info, place, confirmations):
         """Incidents of the last few minutes, plain data for the GUI.
         info(n) -> {number, code, colour}; place(x, y) -> {corner, sector}; confirmations(e, place) -> [texts]."""
@@ -118,11 +136,17 @@ class IncidentDetector:
             conf = confirmations(e, where)
             # a slow stop only counts with something specific to this car: a yellow in its marshal sector, or a
             # message naming it (a red flag / SC alone could be about anyone)
-            if e["needs_confirmation"] and not any(c.startswith(("Yellow", "Double Yellow")) or str(e["number"]) in c for c in conf):
+            named = lambda c: re.search(rf"\b{e['number']}\b", c)
+            if e["pits"]:          # in the pit lane: a yellow in that exact marshal sector, or a message naming the car
+                sec = where.get("sector")
+                if not any(named(c) or (sec and c.startswith(("Yellow", "Double Yellow")) and re.search(rf"\bSECTOR {sec}\b", c.upper()))
+                           for c in conf):
+                    continue
+            elif e["needs_confirmation"] and not any(c.startswith(("Yellow", "Double Yellow")) or named(c) for c in conf):
                 continue
             out.append(dict(info(e["number"]), id=e["id"], kind=e["kind"], state=e["state"], at=e["at"],
                             x=e["x"], y=e["y"], speed_before=e["speed_before"], rejoined_at=e["rejoined_at"],
-                            corner=where.get("corner"), sector=where.get("sector"), confirmed_by=conf[:4]))
+                            corner=where.get("corner"), sector=where.get("sector"), confirmed_by=conf[:4], pits=e["pits"]))
         return out[::-1]
 
 

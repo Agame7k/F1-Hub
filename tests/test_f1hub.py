@@ -258,6 +258,29 @@ class Retirements(unittest.TestCase):
         self.assertNotIn(1, t.retired)
         self.assertEqual(t.order(), [1, 2])
 
+    def test_parked_in_the_pits_is_provisionally_out(self):
+        from datetime import datetime
+        from unittest import mock
+        t = self.tracker("2026-11-01T20:06:00+00:00", {1: self.laps(1, 5), 2: self.laps(1, 5)})
+        t._incident_suppressed = lambda ts: False
+        since = datetime.fromisoformat("2026-11-01T20:04:00+00:00").timestamp()
+        t.incidents = mock.Mock(parked_in_pits=lambda now, hold: {2: since} if now - since >= hold else {})
+        t._detect_retirements()
+        self.assertEqual((t.retired[2]["reason"], t.retired[2]["definite"]), ("stopped in the pits", False))
+        self.assertNotIn(1, t.retired)
+        t.incidents.parked_in_pits = lambda now, hold: {}                # drove out of the garage again
+        t._detect_retirements()
+        self.assertNotIn(2, t.retired)
+
+    def test_lapped_cars_parking_after_the_flag_are_not_out(self):
+        # leader takes the flag after lap 15; car 2 is two laps down and finishes too, car 3 stopped on lap 8
+        t = self.tracker("2026-11-01T20:35:00+00:00", {1: self.laps(1, 15), 2: self.laps(1, 13, start="2026-11-01T20:02:40+00:00"),
+                                                                  3: self.laps(1, 8)})
+        t._chequered({"date": "2026-11-01T20:20:00+00:00", "flag": "CHEQUERED"})
+        t._detect_retirements()
+        self.assertNotIn(2, t.retired)
+        self.assertIn(3, t.retired)
+
     def test_red_flag_doesnt_retire_everyone(self):
         # long stoppage: nobody laps for half an hour, but that's the red flag, not retirements
         t = self.tracker("2026-11-01T20:45:00+00:00", {1: self.laps(1, 8), 2: self.laps(1, 8)},
@@ -764,6 +787,26 @@ class CrashDetection(unittest.TestCase):
         det = IncidentDetector()
         self._drive(det, [(10, 700), (1, 400), (6, 197), (1, 80), (25, 0)])     # brake to the limiter, then the box
         self.assertEqual(det.events, [])
+
+    def test_parked_in_the_pits_is_a_retirement_not_an_incident(self):
+        from f1hub.incidents import IncidentDetector
+        det = IncidentDetector()
+        end = self._drive(det, [(10, 700), (1, 400), (6, 148), (1, 60), (120, 0)])   # 60 km/h pit lane, then the garage
+        info = lambda n: {"number": n, "code": "ALB", "colour": "#fff"}
+        place = lambda x, y: {"corner": None, "sector": 20}
+        self.assertEqual(det.snapshot(end, info, place, lambda e, w: ["Safety car deployed"]), [])
+        self.assertEqual(det.snapshot(end, info, place, lambda e, w: ["Yellow In Track Sector 19"]), [])   # next door
+        self.assertIn(1, det.parked_in_pits(end))
+        shown = det.snapshot(end, info, place, lambda e, w: ["Yellow In Track Sector 20"])
+        self.assertTrue(shown and shown[0]["pits"])
+        self._drive(det, [(3, 200), (5, 500)], start=end)                          # repaired and back out
+        self.assertEqual(det.parked_in_pits(end + 8), {})
+
+    def test_short_pit_stop_is_not_parked(self):
+        from f1hub.incidents import IncidentDetector
+        det = IncidentDetector()
+        end = self._drive(det, [(10, 700), (6, 197), (1, 80), (3, 0)])
+        self.assertEqual(det.parked_in_pits(end + 1), {})
 
     def test_spin_and_drive_off(self):
         from f1hub.incidents import IncidentDetector

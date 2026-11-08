@@ -239,6 +239,7 @@ class LiveTracker:
     def _iso(dt):
         return dt.astimezone(timezone.utc).isoformat()
 
+    PIT_RETIRE = 90     # s: parked in the pit lane this long (no stop takes it) = provisionally retired
     LAP_STALE = 300     # s: a car whose current lap began longer ago than this has stopped (retired, in the garage)
 
     def _lap_floor(self):
@@ -396,15 +397,27 @@ class LiveTracker:
         self.updated = self.now()
 
     def _detect_retirements(self):
-        """Cars that are out: a race-control 'retired/stopped' message, or no new lap for ~3 lap-times
-        (under a red flag, measured up to the moment the red flag came out)."""
+        """Cars that are out: a race-control 'retired/stopped' message, parked in the pit lane for over a
+        minute and a half, or no new lap for ~3 lap-times (under a red flag, measured up to the moment the red
+        flag came out). The last two are provisional and undone if the car drives on."""
         if not self.is_race:
             return
         for m in self.rc.messages:
             up = m["text"].upper()
             if ("RETIRED" in up or "STOPPED" in up) and m["cars"]:
                 for n in m["cars"]:
-                    self.retired.setdefault(n, {"lap": m["lap"], "reason": m["text"], "definite": True})
+                    if not (self.retired.get(n) or {}).get("definite"):     # the official word beats our guess
+                        self.retired[n] = {"lap": m["lap"], "reason": m["text"], "definite": True}
+        # sat in the pit lane / garage long after any pit stop: retired, or a long repair (not a crash)
+        det = getattr(self, "incidents", None)
+        parked = det.parked_in_pits(self.now().timestamp(), self.PIT_RETIRE) if det else {}
+        if self.track_status != "CHEQUERED":         # after the flag the whole field parks in the pit lane
+            for n, since in parked.items():
+                if not self._incident_suppressed(since):
+                    self.retired.setdefault(n, {"lap": self.lap_no.get(n), "reason": "stopped in the pits",
+                                                "definite": False, "pits": True})
+        for n in [n for n, r in self.retired.items() if r.get("pits") and n not in parked]:
+            del self.retired[n]       # drove out again: it was a repair
         if not self.laps_by:
             return
         leader = self.order()[0] if self.order() else None
@@ -415,6 +428,9 @@ class LiveTracker:
         now = self.now().timestamp()
         if self.track_status == "RED" and self.rc.red:      # everyone stopped: judge against when the red came out
             now = min(now, datetime.fromisoformat(self.rc.red["since"]).timestamp())
+        if self.track_status == "CHEQUERED" and getattr(self, "_flag_at", None):
+            # after the flag the field stops lapping and parks: only a car already silent at the flag is out
+            now = min(now, self._flag_at)
         top = max(self.lap_no.values(), default=0)
         for n, laps in self.laps_by.items():
             starts = [(no, datetime.fromisoformat(l["start"]).timestamp()) for no, l in laps.items() if l.get("start")]
@@ -424,7 +440,7 @@ class LiveTracker:
             silent = now - last_start
             if silent > max(3 * typical, 240) and top - last_no >= 2:
                 self.retired.setdefault(n, {"lap": last_no, "reason": f"no timing since lap {last_no}", "definite": False})
-            elif n in self.retired and not self.retired[n]["definite"] and silent < typical * 1.5:
+            elif n in self.retired and not self.retired[n]["definite"] and silent < typical * 1.5 and n not in parked:
                 del self.retired[n]   # it was only a long pit stop / repair
 
     def order(self):
@@ -611,10 +627,16 @@ class LiveTracker:
         flags, neutralisations and track status depend on the order)."""
         self.messages.sort(key=lambda m: _ts(m.get("date")) or 0)
         self.rc = RaceControl(self.session.get("gmt_offset"))
-        self.track_status = "GREEN"
+        self.track_status, self._flag_at = "GREEN", None
         for m in self.messages:
             self.rc.add(m)
             self._track_status(m)
+
+    def _chequered(self, m):
+        """The flag is out: note when (the first time), so the retirement check can judge the field as it was then."""
+        self.track_status = "CHEQUERED"
+        if getattr(self, "_flag_at", None) is None and m.get("date"):
+            self._flag_at = datetime.fromisoformat(m["date"]).timestamp()
 
     def _track_status(self, m):
         msg = (m.get("message") or "").upper()
@@ -624,7 +646,7 @@ class LiveTracker:
             if kind == "red":               # SESSION ABORTED: F1's status while a session is suspended
                 self.track_status = "RED"
             elif "FINISHED" in msg or "ENDED" in msg or "FINALISED" in msg:
-                self.track_status = "CHEQUERED"
+                self._chequered(m)
             elif kind == "started":
                 self.track_status = "GREEN"
             return
@@ -633,7 +655,7 @@ class LiveTracker:
         elif kind in ("sc", "vsc"):
             self.track_status = kind.upper()
         elif flag == "CHEQUERED":
-            self.track_status = "CHEQUERED"
+            self._chequered(m)
         elif self.track_status == "RED":
             # announcements like "RACE WILL RESUME AT 15:45" are not the restart itself;
             # only the session status (handled above) or a track-wide green flag ends a red flag

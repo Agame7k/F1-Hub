@@ -21,7 +21,7 @@ const FX = {
   banner: null, chequer: null,
 };
 const PURPLE = "#b45cff";
-const LIM = [150, 240];            // location units/s at the pit-lane limiter (~60-100 km/h); 1 unit/s ~ 0.406 km/h
+const LIM = [135, 240];            // location units/s at the pit-lane limiter (~55-100 km/h; 60 km/h is ~148); 1 unit/s ~ 0.406 km/h
 const fxNow = () => performance.now();
 
 /* ---------- small helpers on the position history (TRAIL, from map.js) ---------- */
@@ -29,8 +29,18 @@ function covered(n, T, back = 1000) {
   const t = TRAIL[n];
   return t && t.length > 1 && T - back >= t[0][0] && T <= t[t.length - 1][0];
 }
+// A hole in the samples around [t0, t1]: carAt holds the car still across one, which would read as a stop.
+// A feed stall freezes every car at once, so without this it looks like the field parking on the grid.
+function gapIn(n, t0, t1, max = 2000) {
+  const t = TRAIL[n];
+  for (let i = t.length - 1; i > 0; i--) {
+    if (t[i][0] < t0) break;
+    if (t[i - 1][0] <= t1 && t[i][0] - t[i - 1][0] > max) return true;
+  }
+  return false;
+}
 function speedAt(n, T, win = 1000) {   // location units per second over the last `win` ms, or null
-  if (!covered(n, T, win)) return null;
+  if (!covered(n, T, win) || gapIn(n, T - win, T)) return null;
   const a = carAt(n, T - win), b = carAt(n, T);
   return Math.hypot(b[1] - a[1], b[2] - a[2]) / (win / 1000);
 }
@@ -50,7 +60,7 @@ function offTrack(o, x, y) {    // distance from the track's centre line (locati
 }
 const median = a => { if (!a.length) return null; const s = a.slice().sort((p, q) => p - q); return s[s.length >> 1]; };
 function fxReset() {
-  FX.prev = null; FX.flashes = []; FX.sectors = []; FX.pit = {}; FX.lapStarts = {}; FX.lights = {phase: "idle"};
+  FX.prev = null; FX.flashes = []; FX.sectors = []; FX.pit = {}; FX.lapStarts = {}; FX.lights = {phase: "idle"}; FX.lastRed = 0;
   FX.chequer = null; FX.lap = {key: null, trace: null, loading: false};
   scReset();
 }
@@ -167,6 +177,10 @@ function startLights(cars, T) {
     return;
   }
   if (!isRaceSession(D) || D.quali) { el.className = ""; return; }
+  // a standing start only happens before lap 1 or on a restart after a red flag (allow 15 min for the formation)
+  if (D.status === "RED") FX.lastRed = fxNow();
+  const armed = !(D.lap > 1) || (FX.lastRed && fxNow() - FX.lastRed < 15 * 60000);
+  if (!armed && L.phase !== "out") { L.phase = "idle"; el.className = ""; return; }
   const frac = (t, test) => { const v = cars.map(n => speedAt(n, t, 700)).filter(x => x != null); return v.length >= 10 ? v.filter(test).length / v.length : null; };
   const still = frac(T, v => v < 15), moving = frac(T, v => v > 60);
   if (L.phase === "idle") {
@@ -249,7 +263,7 @@ function demoPit(n, st, T) {
 function pitLabel(n, st, T) {
   const row = D.rows.find(r => r.number === n) || {};
   if (st.phase === "lane") return {text: "PIT LANE", cls: "lane"};
-  if (st.phase === "garage") return {text: "IN GARAGE", cls: "lane"};
+  if (st.phase === "garage") return {text: row.out ? (row.out.definite ? "RETIRED" : "RETIRED?") : "IN GARAGE", cls: "lane"};
   if (st.phase === "stop") return {text: (Math.max(0, st.demo ? fxNow() - st.demo - 2000 : T - st.stop) / 1000).toFixed(1), cls: "stop"};
   const off = st.demo ? null : (D.pits || []).find(p => p.number === n && p.stop != null && Math.abs((p.lap || 0) - (row.lap || 0)) <= 1);
   const secs = off ? off.stop : (st.go - st.stop) / 1000, tyre = row.compound && row.compound !== "UNKNOWN" ? row.compound : null;

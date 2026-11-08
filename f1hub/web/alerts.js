@@ -97,7 +97,7 @@ function checkAlerts(d) {
   const pinc = new Map((p.incidents || []).map(i => [i.id, i]));
   (d.incidents || []).forEach(i => {
     const was = pinc.get(i.id);
-    if (!was && i.state === "stopped") toast("crash", `${i.kind === "crash" ? "Crash" : "Stopped on track"}: ${i.code}`, incWhere(i) + (i.speed_before && i.kind === "crash" ? ` · from ${i.speed_before} km/h` : ""), "#ff2a2a");
+    if (!was && i.state === "stopped") toast("crash", `${i.kind === "crash" ? "Crash" : i.pits ? "Stopped in the pits" : "Stopped on track"}: ${i.code}`, incWhere(i) + (i.speed_before && i.kind === "crash" ? ` · from ${i.speed_before} km/h` : ""), "#ff2a2a");
     if (was && was.state === "stopped" && i.state === "rejoined") toast("crash", `${i.code} spun and rejoined`, incWhere(i), "#ffd300");
   });
   if (d.weather && p.weather && d.weather.rain && !p.weather.rain) toast("weather", "Rain reported at the track", `track ${d.weather.track}°C`, "#0067ff");
@@ -108,6 +108,7 @@ function checkAlerts(d) {
 const CRASH = {dismissed: new Set()};
 const INC_WORD = {crash: "CRASH", stopped: "STOPPED ON TRACK", spin: "SPUN"};
 function incWhere(i) {
+  if (i.pits) return "pit lane" + (i.sector ? ` · marshal sector ${i.sector}` : "");
   const bits = [i.corner ? `Turn ${i.corner}` : null, i.sector ? `marshal sector ${i.sector}` : null].filter(Boolean);
   return bits.join(" · ") || "on track";
 }
@@ -125,7 +126,7 @@ function renderCrash(d) {
   CRASH.shown = key;
   el.classList.remove("hidden");
   el.innerHTML = `<div class="crash ${kind}" role="alert"><div class="stripes"></div><div class="body">
-      <div class="what">${ico("alert")}${INC_WORD[kind]}</div>
+      <div class="what">${ico("alert")}${i.pits && kind === "stopped" ? "STOPPED IN THE PITS" : INC_WORD[kind]}</div>
       <div class="who"><i style="background:${esc(i.colour)}"></i><div>${esc(i.code)}<small>${esc(i.name || "")}${i.team ? " · " + esc(i.team) : ""}</small></div></div>
       <div class="where">${esc(incWhere(i))}${i.speed_before && kind === "crash" ? ` · from ${i.speed_before} km/h` : ""}
         <small>${kind === "spin" ? "Spun and drove off again" : (i.confirmed_by || []).length ? esc(i.confirmed_by.join(" · ")) : "Detected from car position - race control hasn't said anything yet"}</small></div>
