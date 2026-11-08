@@ -544,3 +544,25 @@ class FeedServer(Server):
         self.assertEqual((events, cors), (["session"], "*"))
         self.assertEqual(self.get("/api/live", evil)[0], 403)            # only the feed opens up
         self.assertEqual(self.get("/api/feed", {"Host": f"evil.example:{self.port}"})[0], 403)    # DNS rebinding
+
+
+class StartingSoon(unittest.TestCase):
+    """Following "latest": set up for the next session shortly before it starts, not when OpenF1 moves on."""
+    QUALI = {"session_key": 1, "date_start": "2026-11-07T18:00:00+00:00", "date_end": "2026-11-07T19:00:00+00:00"}
+    RACE = {"session_key": 2, "date_start": "2026-11-08T17:00:00+00:00", "date_end": "2026-11-08T19:00:00+00:00"}
+
+    def soon(self, now, cur=None):
+        with mock.patch.object(api, "get", return_value=[self.QUALI, self.RACE]):
+            return gui.Feed._starting_soon(cur or self.QUALI, now=now)
+
+    def test_switches_inside_the_window(self):
+        self.assertEqual(self.soon(datetime(2026, 11, 8, 16, 50, tzinfo=timezone.utc)), [self.RACE])
+
+    def test_waits_until_the_window(self):
+        self.assertEqual(self.soon(datetime(2026, 11, 8, 16, 30, tzinfo=timezone.utc)), [])
+
+    def test_not_while_the_current_session_runs(self):
+        self.assertEqual(self.soon(datetime(2026, 11, 7, 18, 30, tzinfo=timezone.utc)), [])
+
+    def test_never_steps_back(self):
+        self.assertEqual(self.soon(datetime(2026, 11, 8, 20, 0, tzinfo=timezone.utc), cur=self.RACE), [])

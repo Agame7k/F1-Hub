@@ -135,11 +135,57 @@ function qualiCard(d) {
   </div>`;
 }
 
+// Pre-race briefing (d.prerace): countdown, qualifying recap and penalties, last year here, the title going in.
+function preCount(iso) {
+  const s = Math.max(0, Math.round((new Date(iso) - Date.now()) / 1000)), h = Math.floor(s / 3600);
+  return (h ? h + ":" + String(Math.floor(s / 60) % 60).padStart(2, "0") : Math.floor(s / 60)) + ":" + String(s % 60).padStart(2, "0");
+}
+setInterval(() => { const el = document.getElementById("pclock"); if (el && D && D.session_start) el.textContent = preCount(D.session_start); }, 1000);
+
+function preCard(d) {
+  const P = d.prerace, q = P.quali || {}, ly = P.last_year, st = P.standings, loss = P.pit_loss || {};
+  const chip = x => `<b style="border-left:3px solid ${esc(x.colour)};padding-left:5px">${esc(x.code)}</b>`;
+  const tyres = list => list.map(c => `<span class="tyre sm t-${esc(c)}" title="${esc(c)}">${c === "UNKNOWN" ? "?" : esc(c[0])}</span>`).join("");
+  const stops = ly && Object.entries(ly.stops || {}).map(([k, v]) => `${v}× ${k}-stop`).join(", ");
+  const facts = [
+    P.laps ? ["Distance", `<b>${P.laps}</b> laps`] : null,
+    q.pole ? ["Pole", `${chip(q.pole)} ${fmtLap(q.pole.time)}`] : null,
+    (q.front_row || []).length ? ["Front row", q.front_row.map(chip).join(" ")] : null,
+    loss.normal ? ["Pit stop costs", `<b>${loss.normal.toFixed(1)}s</b>${loss.sc ? ` <span class="muted">· SC ${loss.sc.toFixed(1)}s</span>` : ""}${loss.vsc ? ` <span class="muted">· VSC ${loss.vsc.toFixed(1)}s</span>` : ""}`] : null,
+    d.weather ? ["Track / air", `<b>${d.weather.track ?? "-"}°C</b> / ${d.weather.air ?? "-"}°C${d.weather.rain ? ' <b style="color:#4aa3ff">rain</b>' : ""}`] : null,
+  ].filter(Boolean).map(([k, v]) => `<span>${k}</span><span>${v}</span>`).join("");
+  const pens = [...(q.penalties || []).map(p => `${chip(p)} P${p.quali} → <b>P${p.grid}</b>`),
+                ...(q.missing || []).map(p => `${chip(p)} P${p.quali} → <b>pit lane / not starting</b>`)];
+  const isSprint = /sprint/i.test(d.session || "");
+  return `<div class="card qcard pcard">
+    <div class="qtop">
+      <div class="qphase">${isSprint ? "SPRINT" : "RACE"}<small>${esc(d.meeting || "")}</small></div>
+      <div><div class="qclock" id="pclock">${preCount(d.session_start)}</div>
+        <div class="qstate">Starts ${esc(fmtTime(d.session_start))} · grid ${(q.penalties || []).length || (q.missing || []).length ? "after penalties" : "provisional"}</div></div>
+      <div class="qfacts num">${facts}</div>
+    </div>
+    <div class="pgrid2">
+      ${ly ? `<div><div class="plbl">Here last year (${ly.year})</div>
+        <div>${chip(ly.winner)} <span class="muted">${esc(ly.winner.team || "")}</span> won${ly.winner.grid ? ` from <b>P${ly.winner.grid}</b>` : ""}
+          ${ly.winner.stints.length ? ` · ${tyres(ly.winner.stints)}` : ""}</div>
+        <div class="muted">${stops ? `Top 10: ${esc(stops)}` : ""}${ly.dnfs ? ` · ${ly.dnfs} DNF${ly.dnfs > 1 ? "s" : ""}` : ""}</div></div>` : ""}
+      ${st ? `<div><div class="plbl">Championship going in</div>
+        ${st.table.slice(0, 4).map((e, i) => `<div class="ptsrow num"><span class="muted">${i + 1}</span><b>${esc(e.code)}</b>
+          <span class="muted" style="overflow:hidden;text-overflow:ellipsis">${esc(e.team || "")}</span><span class="r">${e.points}</span>
+          <span class="delta muted">${e.behind ? "−" + e.behind : ""}</span></div>`).join("")}
+        <div class="muted" style="font-size:12px;margin-top:4px">${st.decided ? `<b style="color:var(--gold)">${esc(st.decided)}</b> is already champion`
+          : `${st.points_left} pts left · still in it: <b style="color:var(--text)">${st.contenders.map(esc).join(", ")}</b>`}</div></div>` : ""}
+    </div>
+    ${pens.length ? `<div class="qknock">Grid changes: ${pens.join(" · ")}</div>` : ""}
+  </div>`;
+}
+
 function renderLive(d) {
   // qualifying / sprint qualifying: segment gaps from that segment's best laps, Q1/Q2/Q3 columns, drop-zone lines
   const Q = d.quali && d.quali.phase ? d.quali : null;
   const quali = Q || /qualifying|shootout/i.test(d.session || "");
-  $("qualibox").innerHTML = Q ? qualiCard(d) : "";
+  $("qualibox").innerHTML = Q ? qualiCard(d) : d.pre_session && d.prerace ? preCard(d) : "";
+  const preQ = d.pre_session && d.prerace && d.prerace.quali ? d.prerace.quali.times : null;   // qualifying times on the grid
   const qx = r => (Q && Q.rows[r.number]) || {};
   const n = d.rows.length;
   let cuts = {};
@@ -185,7 +231,7 @@ function renderLive(d) {
       <td class="r">${quali ? qint(r, i) : r.out || r.pos === 1 ? "" : fmtGap(r.interval)}</td>
       ${(r.sectors || [null, null, null]).map(x => `<td class="r">${x && x.t ? `<span class="sec ${x.c}">${x.t.toFixed(3)}</span>` : '<span class="muted">-</span>'}</td>`).join("")}
       <td class="r">${fmtLap(r.last_lap)}</td>
-      <td class="r ${r.fastest ? "purple" : ""}">${fmtLap(r.best_lap)}${x.deleted ? ` <span class="muted" title="${x.deleted} lap time(s) deleted">✕${x.deleted}</span>` : ""}</td>
+      <td class="r ${r.fastest ? "purple" : ""}">${preQ && !r.best_lap && preQ[r.number] ? `<span class="muted" title="Qualifying (P${preQ[r.number].pos})">${fmtLap(preQ[r.number].time)}</span>` : fmtLap(r.best_lap)}${x.deleted ? ` <span class="muted" title="${x.deleted} lap time(s) deleted">✕${x.deleted}</span>` : ""}</td>
       <td><span class="tyre t-${esc(comp)}">${comp === "UNKNOWN" ? "?" : esc(comp[0])}</span>${r.tyre_age ?? "-"}</td>
       <td class="r">${r.pits}</td>
       ${Q ? qcol(r, 1) + qcol(r, 2) + qcol(r, 3) : `<td class="r">${r.grid ?? "-"}</td>
@@ -203,7 +249,8 @@ function renderLive(d) {
       ${t.table.slice(0, 5).map((e, i) => `<div class="ptsrow num"><span class="muted">${i + 1}</span><b>${esc(e.code)}</b>
         <span class="muted" style="overflow:hidden;text-overflow:ellipsis">${esc(e.name)}</span><span class="r">${e.points}</span>
         <span class="delta">${e.delta ? "+" + e.delta : ""}</span></div>`).join("")}
-    </div>`).join("") || `<div class="title pad muted">No championship data for this session.</div>`;
+    </div>`).join("") || `<div class="title pad muted">${d.pre_session ? "The live title picture starts with the race - the standings going in are above the timing."
+      : "No championship data for this session."}</div>`;
 
   const w = d.weather;
   $("wx").innerHTML = w ? `<div><span class="muted">Track</span><b>${w.track ?? "-"}°C</b></div>

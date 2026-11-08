@@ -112,9 +112,11 @@ function homeSeason() {
 // isn't enough - a red flag can run a session well past its planned end - so "ended" also needs the data to have
 // gone quiet, and "upcoming" needs there to be none yet.
 function airState() {
-  if (!D || D.mode !== "live" || D.error || (H && H.state === "live")) return "on";
+  if (!D || D.mode !== "live" || D.error) return "on";
   const now = Date.now(), quiet = !D.last_event || now / 1000 - D.last_event > 600;
-  if (D.session_start && now < new Date(D.session_start).getTime() && !(D.rows || []).length) return "upcoming";
+  // before the start (the race tower shows the grid by then, so "no rows" alone isn't the test)
+  if (D.session_start && now < new Date(D.session_start).getTime() && (D.pre_session || !(D.rows || []).length)) return "upcoming";
+  if (H && H.state === "live") return "on";
   if (D.session_end && now > new Date(D.session_end).getTime() && quiet) return "ended";
   return "on";
 }
@@ -124,8 +126,10 @@ function offAirHeader() {   // header while nothing is on: no "live" chips, and 
   if (!off) return;
   const now = Date.now(), nx = air === "upcoming" ? {name: D.session, meeting: D.meeting, start: D.session_start} : H && H.next;
   const fc = $("feedchip");
-  fc.className = "feedchip"; fc.textContent = "OFF AIR";
-  fc.title = "No session running. The app checks every minute and switches to the next session when it starts.";
+  fc.className = "feedchip";
+  fc.textContent = air === "upcoming" ? (/^(race|sprint)$/i.test(D.session || "") ? "PRE-RACE" : "PRE-SESSION") : "OFF AIR";
+  fc.title = air === "upcoming" ? "The session hasn't started yet. Timing goes live at the start."
+    : "No session running. The app checks every minute and switches to the next session when it starts.";
   $("meta").innerHTML = air === "upcoming" ? `Session not started yet<br>${esc(nx.name || "")} <b>${cdShort(new Date(nx.start) - now)}</b>`
     : nx ? `No session running<br>Next: ${esc(nx.name)} · ${esc(nx.meeting || "")} <b>${cdShort(new Date(nx.start) - now)}</b>` : "No session running";
 }
@@ -147,7 +151,7 @@ function tickHome() {     // once a second: the countdowns, and the "session has
   const bar = $("endedbar");
   const air = airState(), ended = air === "ended";
   bar.classList.toggle("hidden", air === "on");
-  if (air === "upcoming") bar.innerHTML = `${ico("clock")}<span><b>${esc(D.session || "This session")} hasn't started yet</b> - it starts <b>${cdShort(new Date(D.session_start) - now)}</b> (${fmtWhen(D.session_start)}). Timing appears here as soon as it does.</span>
+  if (air === "upcoming") bar.innerHTML = `${ico("clock")}<span><b>${esc(D.session || "This session")} hasn't started yet</b> - it starts <b>${cdShort(new Date(D.session_start) - now)}</b> (${fmtWhen(D.session_start)}). ${(D.rows || []).length ? "Showing the provisional grid until then." : "Timing appears here as soon as it does."}</span>
     <button class="btn" onclick="openTab('home')">Home</button>`;
   if (ended) bar.innerHTML = `${ico("flag")}<span><b>This session has finished.</b> ${H.next ? `Next: ${esc(H.next.name)} · ${esc(H.next.meeting)} <b>${cdShort(new Date(H.next.start) - now)}</b>` : ""}</span>
     <button class="btn" onclick="openTab('home')">Home</button><button class="btn" onclick="replaySession(${+D.session_key})">Replay it</button>`;

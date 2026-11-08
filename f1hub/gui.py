@@ -324,6 +324,7 @@ class Feed:
         self.session_key = session_key
         self.interval = max(2, interval)   # back-off after errors; normal pacing is per endpoint
         self.live_tracker = None
+        self.session_target = None          # following "latest": a session about to start that OpenF1 doesn't call latest yet
         self.live = {"error": "Connecting to OpenF1..."}
         self.history = deque()              # (wall_time, data_time, snapshot) for the delay setting
         self.lock = threading.Lock()        # guards live/history/settings; trackers live on the feed thread
@@ -514,7 +515,7 @@ class Feed:
                 else:
                     self._check_rollover()
                     if self.live_tracker is None:
-                        self.live_tracker = LiveTracker(self.session_key)
+                        self.live_tracker = LiveTracker(self.session_target or self.session_key)
                         if self.focus:
                             self.live_tracker.set_focus(self.focus)
                         self.live_tracker.set_view(self.view)
@@ -614,12 +615,36 @@ class Feed:
             latest = api.get("sessions", ttl=30, session_key="latest")
         except Exception:
             return
-        if latest and latest[0]["session_key"] != self.live_tracker.key:
-            log.info("New session: %s %s - switching to it", latest[0].get("location"), latest[0].get("session_name"))
+        cur = self.live_tracker.session
+        cands = list(latest or []) + self._starting_soon(cur)
+        cands = [x for x in cands if x.get("date_start", "") >= cur.get("date_start", "")]   # never step back
+        target = max(cands, key=lambda x: x["date_start"], default=None)
+        if target and target["session_key"] != self.live_tracker.key:
+            log.info("New session: %s %s - switching to it", target.get("location"), target.get("session_name"))
+            self.session_target = target["session_key"]
             self.live_tracker = None
             with self.lock:
                 self.history.clear()        # the delay buffer belongs to the old session
                 self.seek += 1
+
+    @staticmethod
+    def _starting_soon(cur, now=None):
+        """The next session, once it's within home.LIVE_BEFORE of its start and `cur` has finished.
+        OpenF1's "latest" only moves on when a session actually starts, which left the dashboard on
+        Saturday's qualifying right up to the race start instead of setting up for it."""
+        from .home import LIVE_BEFORE
+        now = now or datetime.now(timezone.utc)
+        end = cur.get("date_end")
+        if not end or datetime.fromisoformat(end) > now:
+            return []
+        try:
+            sessions = api.get("sessions", ttl=3600, year=now.year)     # same call as the home page: cached
+        except Exception:
+            return []
+        soon = [x for x in sessions if not x.get("is_cancelled") and x.get("date_start")
+                and x["date_start"] > cur.get("date_start", "")
+                and now >= datetime.fromisoformat(x["date_start"]) - LIVE_BEFORE]
+        return [min(soon, key=lambda x: x["date_start"])] if soon else []
 
     def _replay_limit(self, r):
         end = r["store"].actual_end() + timedelta(minutes=20)

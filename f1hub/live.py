@@ -13,7 +13,7 @@ import time
 from collections import deque
 from datetime import datetime, timedelta, timezone
 
-from . import api, quali
+from . import api, prerace, quali
 from .incidents import IncidentDetector, confirmations_from
 from .championship import Entry, max_remaining, sort_standings, title_status
 from .display import GOLD, c, dim, fmt_time, header, pad, tyre
@@ -75,16 +75,21 @@ class LiveTracker:
         self.grid = {}
         if self.is_race:
             self.grid = {g["driver_number"]: g["position"] for g in self._fetch("starting_grid", session_key=self.key)}
-            if not self.grid:   # not published yet: use the qualifying order
-                q_name = "Sprint Qualifying" if self.is_sprint else "Qualifying"
+            q_name = "Sprint Qualifying" if self.is_sprint else "Qualifying"
+            q = None
+            if not self.grid or not self.drivers:
                 q = self._fetch("sessions", meeting_key=self.session["meeting_key"], session_name=q_name)
-                if q:
-                    self.grid = {r["driver_number"]: r["position"]
-                                 for r in api.get("session_result", ttl=600, session_key=q[0]["session_key"])
-                                 if r.get("position")}
+            if q and not self.grid:   # not published yet: use the qualifying order
+                self.grid = {r["driver_number"]: r["position"]
+                             for r in api.get("session_result", ttl=600, session_key=q[0]["session_key"])
+                             if r.get("position")}
+            if q and not self.drivers:   # before the start OpenF1 may not list the race's drivers yet
+                self.drivers = {d["driver_number"]: d for d in self._fetch("drivers", session_key=q[0]["session_key"])}
         self.scheduled_laps = self._scheduled_laps()
         self.circuit = self._circuit_info()
         self.position, self.gap, self.interval = {}, {}, {}
+        if self.is_race:
+            self.position = dict(self.grid)   # pre-race the tower shows the grid; real positions replace it
         self.last_lap, self.best_lap, self.lap_no = {}, {}, {}
         self.stints, self.pits = {}, {}
         self.messages, self.weather = [], None
@@ -796,6 +801,7 @@ class LiveTracker:
                                    f"If the race is NOT resumed - reduced points ({laps_done}/"
                                    f"{self.scheduled_laps} laps, {pct}%)" if pct is not None else "If not resumed"))
         w = self.weather or {}
+        pre = lead_lap == 0 and self.now().timestamp() < self.start_ts
         return {
             "meeting": self.meeting.get("meeting_name") or self.session.get("location"),
             "circuit": self.session.get("circuit_short_name"), "session": self.session["session_name"],
@@ -804,6 +810,8 @@ class LiveTracker:
             "meeting_key": self.session.get("meeting_key"),
             "lead_lap_start": self._lead_lap_start(),
             "session_start": self.session.get("date_start"), "session_end": self.session.get("date_end"),
+            "pre_session": pre,
+            "prerace": prerace.picture(self, season) if pre else None,
             "updated": self.updated.isoformat() if self.updated else None,
             "weather": {"track": w.get("track_temperature"), "air": w.get("air_temperature"),
                         "rain": bool(w.get("rainfall")), "humidity": w.get("humidity"),
