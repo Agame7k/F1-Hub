@@ -317,6 +317,8 @@ class Feed:
         self._hist_at = 0.0
         from .transcribe import Transcriber
         self.stt = Transcriber()            # team radio speech-to-text (needs the .venv; optional)
+        from .sting import IntroFinder
+        self.intro = IntroFinder()          # where F1's radio intro sting ends in each clip (needs ffmpeg)
         if api.authenticated():
             from .stream import Stream
             self.stream = Stream()
@@ -508,8 +510,13 @@ class Feed:
             self.wake.clear()
 
     def _session_over(self, margin=timedelta(minutes=30)):
-        end = self.live_tracker and self.live_tracker.session.get("date_end")
-        return bool(end) and datetime.now(timezone.utc) > datetime.fromisoformat(end) + margin
+        """Past the scheduled end *and* gone quiet: red flags can run a session long past its schedule."""
+        tr = self.live_tracker
+        end = tr and tr.session.get("date_end")
+        if not end or datetime.now(timezone.utc) < datetime.fromisoformat(end) + margin:
+            return False
+        last = getattr(tr, "last_event", None)
+        return not last or time.time() - last > 600
 
     def _check_rollover(self):
         """Following "latest": when the next session starts (FP1 on Friday...), switch to it by itself."""
@@ -528,7 +535,7 @@ class Feed:
                 self.seek += 1
 
     def _replay_limit(self, r):
-        end = datetime.fromisoformat(r["store"].session["date_end"]) + timedelta(minutes=20)
+        end = r["store"].actual_end() + timedelta(minutes=20)
         return min(end, datetime.now(timezone.utc) - timedelta(seconds=5))
 
     def _replay_catch_up(self, until=None):
@@ -557,7 +564,8 @@ class Feed:
         snap.update(refresh_seconds=REPLAY_TICK, mode="replay", replay={
             "t": tr.now().isoformat(), "wall": wall, "limit": self._replay_limit(r).isoformat(),
             "playing": r["playing"], "speed": r["speed"],
-            "start": s["date_start"], "end": s["date_end"], "markers": tr.markers(),
+            "start": s["date_start"], "end": r["store"].actual_end().isoformat(),
+            "timeline": tr.timeline(spoiler=self.settings["spoiler"]),
             "name": f"{tr.meeting.get('meeting_name', '')} - {s['session_name']} {s.get('year', '')}"})
         with self.lock:
             self.live = snap
@@ -610,8 +618,10 @@ class Feed:
         if not radio:
             snap["stt"] = self.stt.status()
             return
-        self.stt.request([r.get("url") for r in reversed(radio)])
-        snap["radio"] = [dict(r, stt=self.stt.get(r.get("url"))) for r in radio]
+        urls = [r.get("url") for r in reversed(radio)]
+        self.stt.request(urls)
+        self.intro.request(urls)
+        snap["radio"] = [dict(r, stt=self.stt.get(r.get("url")), skip=self.intro.get(r.get("url"))) for r in radio]
         snap["stt"] = self.stt.status()
 
     def hidden_meeting(self):

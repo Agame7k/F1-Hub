@@ -145,15 +145,18 @@ def _build_url(endpoint, params):
     return BASE + endpoint + ("?" + "&".join(parts) if parts else "")
 
 
-def get(endpoint, ttl=FOREVER, cache=True, **params):
+def get(endpoint, ttl=FOREVER, cache=True, fetched_after=None, **params):
     """GET an endpoint. ttl: seconds a cached copy stays fresh (None = forever).
+    fetched_after: epoch seconds - a cached copy saved before then is stale whatever the ttl
+    (e.g. one saved while the session was still running).
     cache=False: always hit the network and store nothing (live timing)."""
     url = _build_url(endpoint, params)
     path = _cache_path(url)
     stale = None
     if cache and path.exists():
         cached = json.loads(path.read_text())
-        if offline or ttl is FOREVER or time.time() - cached["fetched"] < ttl:
+        fresh = ttl is FOREVER or time.time() - cached["fetched"] < ttl
+        if offline or (fresh and (fetched_after is None or cached["fetched"] >= fetched_after)):
             return cached["data"]
         stale = cached["data"]
     if offline:

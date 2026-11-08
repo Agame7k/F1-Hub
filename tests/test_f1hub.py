@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime, timezone
 from unittest import mock
 
 from f1hub import api
@@ -161,6 +162,40 @@ class RedFlagTracking(unittest.TestCase):
         rc.add({"date": "2026-11-01T21:06:02+00:00", "message": "RED FLAG", "category": "Other"})
         rc.add({"date": "2026-11-01T21:40:00+00:00", "message": "THE RACE WILL NOT BE RESUMED", "category": "Other"})
         self.assertEqual(rc.red["state"], "abandoned")
+
+    def test_quali_segment_not_resumed(self):
+        # São Paulo 2026: red flag ended Q2, then Q3 ran normally - the stoppage belongs to Q2 and is closed by Q3
+        from f1hub.racecontrol import RaceControl
+        rc = RaceControl("-03:00:00")
+        M = lambda t, msg, cat="Other", **k: dict({"date": f"2026-11-07T{t}+00:00", "category": cat, "message": msg}, **k)
+        rc.add(M("20:03:17", "SESSION ABORTED", "SessionStatus", qualifying_phase=2))
+        rc.add(M("20:03:18", "RED FLAG", "Flag", flag="RED", qualifying_phase=2))
+        rc.add(M("20:04:28", "Q2 WILL NOT BE RESUMED"))
+        rc.add(M("20:05:47", "SESSION FINISHED", "SessionStatus", qualifying_phase=2))
+        self.assertEqual((rc.red["state"], rc.red["phase"]), ("abandoned", 2))
+        rc.add(M("20:14:00", "SESSION STARTED", "SessionStatus", qualifying_phase=3))
+        self.assertEqual(rc.red["state"], "closed")
+
+
+class ReplayEnd(unittest.TestCase):
+    """São Paulo 2026 qualifying: scheduled to end 19:00, red flags ran it to 20:27."""
+    def store(self, msgs):
+        from f1hub.replay import SessionStore, _stamp
+        st = SessionStore({"session_key": 1, "session_name": "Qualifying",
+                           "date_start": "2026-11-07T18:00:00+00:00", "date_end": "2026-11-07T19:00:00+00:00"})
+        return st, _stamp([dict(date=f"2026-11-07T{t}+00:00", category="SessionStatus", message=m, qualifying_phase=p)
+                           for t, m, p in msgs])
+
+    def test_not_final_until_q3_ends(self):
+        st, rc = self.store([("18:00:00", "SESSION STARTED", 1), ("19:41:37", "SESSION FINISHED", 1),
+                             ("19:49:00", "SESSION STARTED", 2), ("20:05:47", "SESSION FINISHED", 2)])
+        with mock.patch("time.time", return_value=datetime(2026, 11, 7, 20, 10, tzinfo=timezone.utc).timestamp()):
+            self.assertIsNone(st._final_end(rc))        # past the schedule, but only Q2 has ended
+
+    def test_final_at_the_real_end(self):
+        st, rc = self.store([("18:00:00", "SESSION STARTED", 1), ("20:14:00", "SESSION STARTED", 3),
+                             ("20:27:00", "SESSION FINISHED", 3)])
+        self.assertEqual(st._final_end(rc), datetime(2026, 11, 7, 20, 27, tzinfo=timezone.utc).timestamp())
 
 
 class LiveStatus(unittest.TestCase):
@@ -500,6 +535,9 @@ class ReplayClock(unittest.TestCase):
 
         class Store:
             session = {"date_start": "2026-11-01T20:00:00+00:00", "date_end": "2026-11-01T22:00:00+00:00"}
+
+            def actual_end(self):
+                return datetime.fromisoformat(self.session["date_end"])
 
         f = Feed.__new__(Feed)
         self.start = datetime(2026, 11, 1, 20, 30, tzinfo=timezone.utc)

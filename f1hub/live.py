@@ -379,12 +379,13 @@ class LiveTracker:
             if start <= t and (end is None or t < end + (300 if self.is_race else 0)):
                 return True
         if self.is_race:
-            if getattr(self, "_race_start", None) is None:      # lights out = the first lap-1 start (cached once known)
+            race_start = getattr(self, "_race_start", None)     # lights out = the first lap-1 start (cached once known)
+            if race_start is None:
                 starts = [datetime.fromisoformat(l["start"]).timestamp() for laps in self.laps_by.values()
                           for no, l in laps.items() if no == 1 and l.get("start")]
                 if len(starts) >= 3:
-                    self._race_start = min(starts)
-            if self._race_start is None or t < self._race_start + 5:
+                    race_start = self._race_start = min(starts)
+            if race_start is None or t < race_start + 5:
                 return True
         return False
 
@@ -644,7 +645,7 @@ class LiveTracker:
             "meeting": self.meeting.get("meeting_name") or self.session.get("location"),
             "circuit": self.session.get("circuit_short_name"), "session": self.session["session_name"],
             "status": self.track_status, "lap": lead_lap, "scheduled_laps": self.scheduled_laps,
-            "now": self.now().isoformat(), "session_key": self.key, "data_time": self.data_time(),
+            "now": self.now().isoformat(), "session_key": self.key, "data_time": self.data_time(), "last_event": getattr(self, "last_event", None),
             "meeting_key": self.session.get("meeting_key"),
             "lead_lap_start": self._lead_lap_start(),
             "session_start": self.session.get("date_start"), "session_end": self.session.get("date_end"),
@@ -679,6 +680,7 @@ class LiveTracker:
                     newest = max(newest, datetime.fromisoformat(v).timestamp())
                 except ValueError:
                     pass
+        self.last_event = newest or None      # unclamped: how long the session has actually been quiet
         self._data_t = max(self._data_t, min(now, max(newest, now - min(max(lat, 1.0), 10.0))))
         return round(self._data_t, 3)
 

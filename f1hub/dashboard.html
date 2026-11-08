@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>F1 Hub Live</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Titillium+Web:ital,wght@0,400;0,600;0,700;0,900;1,700;1,900&family=Roboto+Mono:wght@500;700&display=swap" rel="stylesheet">
 <style>
   :root {
     --bg: #0d0e12; --panel: #16181f; --panel2: #1d2029; --line: #2a2e3a;
@@ -24,7 +26,8 @@
   .pill { padding: 4px 12px; border-radius: 4px; font-weight: 800; letter-spacing: 1px; font-size: 13px; color: #000; }
   .pill.GREEN { background: var(--green); } .pill.SC, .pill.VSC { background: var(--amber); }
   .pill.RED { background: var(--red); color: #fff; animation: pulse 1.2s infinite; }
-  .pill.CHEQUERED { background: repeating-conic-gradient(#fff 0 25%, #000 0 50%) 0 0/12px 12px; text-shadow: 0 0 3px #fff; }
+  .pill.CHEQUERED { border: 4px solid transparent; padding: 0 8px; color: #000;
+    background: linear-gradient(#fff, #fff) padding-box, repeating-conic-gradient(#000 0 25%, #fff 0 50%) 0 0/8px 8px border-box; }
   .chip { padding: 3px 9px; border-radius: 4px; font-size: 12px; font-weight: 700; border: 1px solid var(--line); color: var(--muted); }
   .chip.on { color: #000; background: var(--green); border-color: var(--green); }
   @keyframes pulse { 50% { opacity: .55; } }
@@ -169,9 +172,35 @@
   .switch input { width: 18px; height: 18px; accent-color: var(--red); }
   #scrubbar { display: none; position: sticky; top: 0; z-index: 20; background: #1a1024; border-bottom: 2px solid var(--purple); padding: 8px 20px; }
   #scrubbar.on { display: block; }
-  .scrub { position: relative; height: 26px; }
-  .scrub input { position: absolute; inset: 0; width: 100%; margin: 0; accent-color: var(--purple); }
-  .mk { position: absolute; top: 0; width: 3px; height: 8px; border-radius: 1px; pointer-events: none; }
+  .scrub { position: relative; height: 50px; margin-top: 4px; }
+  .scrub input { position: absolute; left: 0; right: 0; bottom: 0; height: 22px; width: 100%; margin: 0; accent-color: var(--purple); }
+  /* the range thumb is ~16px wide: its centre runs from 8px to (width - 8px), so lanes are inset to line up */
+  #markers, #bands { position: absolute; left: 8px; right: 8px; }
+  #markers { top: 0; height: 26px; }
+  #bands { bottom: 7px; height: 8px; border-radius: 4px; background: #ffffff10; overflow: hidden; pointer-events: none; }
+  #bands i { position: absolute; top: 0; bottom: 0; }
+  #bands .b-seg { background: #b138dd55; } #bands .b-seg.alt { background: #b138dd99; }
+  #bands .b-red { background: #e10600cc; }
+  #bands::after { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: var(--p, 0%); background: #ffffff26; }  /* played */
+  /* the slider itself is just the handle: its own track would cover the bands */
+  .scrub input { -webkit-appearance: none; appearance: none; background: transparent; cursor: pointer; }
+  .scrub input::-webkit-slider-runnable-track { background: transparent; height: 22px; }
+  .scrub input::-moz-range-track { background: transparent; }
+  .scrub input::-moz-range-progress { background: transparent; }
+  .scrub input::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; margin-top: 3px; border-radius: 50%; background: #fff; border: 3px solid var(--purple); box-shadow: 0 0 0 2px #1a1024; }
+  .scrub input::-moz-range-thumb { width: 10px; height: 10px; border-radius: 50%; background: #fff; border: 3px solid var(--purple); box-shadow: 0 0 0 2px #1a1024; }
+  .mk { position: absolute; transform: translateX(-50%); border: 0; cursor: pointer; padding: 0; font: inherit; }
+  .mk::after { content: ""; position: absolute; left: 50%; width: 1px; transform: translateX(-50%); background: inherit; opacity: .7; }
+  .mk.lbl { top: 0; padding: 2px 6px; border-radius: 2px; font-size: 11px; font-weight: 900; font-style: italic; letter-spacing: .5px; line-height: 14px; color: #fff; background: var(--purple); z-index: 2; }
+  .mk.lbl::after { top: 100%; height: 10px; }
+  .mk.dot { top: 9px; width: 10px; height: 10px; border-radius: 50%; box-shadow: 0 0 0 2px #1a1024; }
+  .mk.dot::after { top: 100%; height: 7px; }
+  .mk.k-red { background: var(--red); } .mk.k-sc, .mk.k-vsc { background: var(--amber); } .mk.k-restart { background: var(--green); }
+  .mk.k-chequered { background: repeating-conic-gradient(#fff 0 25%, #111 0 50%) 0 0/5px 5px; }
+  .mk:hover { filter: brightness(1.3); z-index: 3; }
+  .chapters { display: inline-flex; gap: 4px; margin-left: 6px; }
+  .chapters .btn { padding: 3px 9px; font-size: 12px; }
+  .chapters .btn.on { background: var(--purple); border-color: var(--purple); color: #fff; }
   tr.out td { opacity: .45; } tr.out td.pos { color: #ff5050; opacity: 1; font-size: 11px; }
   .hiddenres { color: var(--muted); font-style: italic; }
 
@@ -393,6 +422,10 @@
   .champrow .gp { color: var(--muted); font-size: 12px; min-width: 44px; text-align: right; }
   #endedbar { margin-bottom: 12px; padding: 10px 14px; border-radius: 8px; background: var(--panel2); border: 1px solid var(--line); display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
   #endedbar b { color: var(--text); }
+  .offair #om { display: none; }
+  .offair .lap, .offair #status { opacity: .55; }
+  .offair .feedchip { color: var(--muted); border-color: var(--line); }
+  .offair .modechip.live { background: #3a3d48; color: #c9ccd4; }
   /* ---------- shared look ---------- */
   .card h2 .sub, .sub { color: var(--muted); text-transform: none; letter-spacing: 0; font-weight: 400; font-size: 12px; }
   .blue { color: var(--blue); }
@@ -456,6 +489,77 @@
     .card h2 { flex-wrap: wrap; }
     .msg { grid-template-columns: 1fr; gap: 2px; }
   }
+
+  /* ================================================================= F1 broadcast theme
+     Layered on top of the base styles: sharper panels, slanted red accents, broadcast type. */
+  :root { --bg: #0b0c10; --panel: #15171d; --panel2: #1b1e26; --line: #262a35; --red: #e10600; }
+  body { background: radial-gradient(1200px 500px at 85% -10%, #e1060012, transparent 60%),
+                     repeating-linear-gradient(135deg, #ffffff03 0 2px, transparent 2px 6px), var(--bg); background-attachment: fixed; }
+  .num { font-family: "Roboto Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  table.num th, table.num .drv, table.num .pos { font-family: "Titillium Web", system-ui, sans-serif; }
+
+  /* header: red racing stripe, italic brand, slanted status flag */
+  header { position: relative; background: linear-gradient(90deg, #1a0306 0, #120507 22%, var(--bg) 60%); border-bottom: 0;
+           box-shadow: inset 0 3px 0 var(--red); padding-top: 14px; }
+  header::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 2px;
+                  background: linear-gradient(90deg, var(--red) 0 30%, #e1060055 55%, transparent); }
+  .brand { font-style: italic; font-weight: 900; font-size: 22px; letter-spacing: -.5px; line-height: 1; display: flex; align-items: center; gap: 4px; }
+  .brand::before { content: ""; width: 22px; height: 14px; flex: none;
+                   background: repeating-linear-gradient(90deg, var(--red) 0 4px, transparent 4px 7px); transform: skewX(-25deg); }
+  .brand span { color: var(--red); margin-left: 2px; }
+  .event { font-weight: 700; text-transform: uppercase; letter-spacing: .5px; }
+  .event small { text-transform: none; letter-spacing: 0; }
+  .pill { border-radius: 0; padding: 4px 16px; font-weight: 900; letter-spacing: 1.5px; font-style: italic;
+          clip-path: polygon(8px 0, 100% 0, calc(100% - 8px) 100%, 0 100%); }
+  .pill.CHEQUERED { clip-path: none; transform: skewX(-12deg); border-radius: 0; }
+  .lap b { font-size: 20px; }
+  .bar { height: 3px; border-radius: 0; }
+  .bar i { background: linear-gradient(90deg, #8a0400, var(--red)); }
+
+  /* tabs: uppercase with a slanted red marker under the active one */
+  nav { background: #101217; gap: 0; }
+  nav button { position: relative; text-transform: uppercase; font-size: 12px; letter-spacing: 1px; padding: 12px 14px; border-bottom: 0; }
+  nav button:hover { color: var(--text); }
+  nav button.on::after { content: ""; position: absolute; left: 10px; right: 10px; bottom: 0; height: 3px; background: var(--red); transform: skewX(-30deg); }
+  nav button .badge { border-radius: 2px; font-style: italic; }
+
+  /* panels: square corners, titles with a red slash marker */
+  .card { border-radius: 3px; border-color: var(--line); box-shadow: 0 1px 0 #ffffff06 inset, 0 6px 18px #0005; }
+  .card h2 { color: #d4d7df; font-weight: 900; font-style: italic; letter-spacing: 1.2px; background: linear-gradient(90deg, #1f222c, var(--panel2));
+             justify-content: flex-start; }
+  .card h2::before { content: ""; width: 4px; height: 13px; background: var(--red); transform: skewX(-20deg); flex: none; }
+  .card h2 > :last-child { margin-left: auto; }
+  .card h2 .sub { font-style: normal; }
+
+  /* timing tower */
+  th { text-transform: uppercase; font-size: 11px; letter-spacing: .8px; font-weight: 700; background: #12141a; }
+  tbody tr:nth-child(even) td { background: #ffffff04; }
+  td { border-top-color: #20242e; }
+  td.pos { font-weight: 900; font-size: 15px; font-style: italic; color: #fff; }
+  .stripe { width: 5px; height: 20px; border-radius: 0; transform: skewX(-15deg); }
+  table.num .drv { font-weight: 900; letter-spacing: .5px; font-size: 15px; }
+  table.num .drv .nm { font-weight: 400; letter-spacing: 0; font-size: 13px; }
+  tr.focus td { background: linear-gradient(90deg, #e1060022, #232a3d 40%) !important; }
+  tr.focus td:first-child { box-shadow: inset 3px 0 0 var(--red); }
+  .sec { border-radius: 2px; font-weight: 700; }
+  .sec.purple { background: #7a1fb0; color: #fff; } .sec.green { background: #13823a; color: #fff; } .sec.yellow { background: transparent; color: #ffd84a; }
+  .purple { color: #c56cff; }
+
+  /* Pirelli-style tyre roundels: dark centre, coloured band, coloured letter */
+  .tyre { background: #0b0b0d; border-width: 3px; box-shadow: inset 0 0 0 1px #000, 0 0 0 1px #000; font-weight: 900; }
+  .t-SOFT { color: #ff3b30; } .t-MEDIUM { color: #ffd300; } .t-HARD { color: #f0f0f0; }
+  .t-INTERMEDIATE { color: #39b54a; } .t-WET { color: #2f86ff; } .t-UNKNOWN { color: #888; }
+
+  /* controls */
+  .btn, .gear, .filters button, .chip, .feedchip { border-radius: 2px; }
+  .btn.primary { font-style: italic; }
+  .modechip { border-radius: 0; font-style: italic; clip-path: polygon(6px 0, 100% 0, calc(100% - 6px) 100%, 0 100%); padding: 4px 14px; }
+  .filters button.on { background: #e1060018; }
+  .msg { border-left-width: 4px; }
+  .tag { border-radius: 1px; }
+  .toast { border-radius: 2px; }
+  ::-webkit-scrollbar-thumb { background: #2f3442; border-radius: 0; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--red); }
 </style>
 </head>
 <body>
@@ -481,12 +585,12 @@
   <div class="row2" style="justify-content:space-between">
     <div class="row2"><button class="btn" id="playbtn" onclick="togglePlay()">▶</button>
       <select id="speedsel" onchange="ctl({speed: this.value})"><option value="1">1×</option><option value="2">2×</option><option value="5">5×</option><option value="10">10×</option></select>
-      <b id="replayname"></b></div>
+      <b id="replayname"></b><span class="chapters" id="chapters"></span></div>
     <div class="row2"><span class="num" id="replayclock"></span><button class="btn" onclick="seekRel(-60)">-1 min</button><button class="btn" onclick="seekRel(-10)">-10 s</button>
       <button class="btn" onclick="seekRel(10)">+10 s</button><button class="btn" onclick="seekRel(60)">+1 min</button>
       <button class="btn primary" onclick="ctl({mode: 'live'})">Back to live</button></div>
   </div>
-  <div class="scrub"><div id="markers"></div><input type="range" id="scrub" min="0" max="1000" value="0"></div>
+  <div class="scrub"><div id="markers"></div><div id="bands"></div><input type="range" id="scrub" min="0" max="1000" value="0"></div>
 </div>
 <aside id="drawer">
   <section class="row2" style="justify-content:space-between"><b style="font-size:16px">Settings</b><button class="btn" onclick="toggleDrawer()">✕</button></section>
@@ -545,6 +649,7 @@
     <dt><kbd>M</kbd></dt><dd>Mini timing tower</dd>
     <dt><kbd>Space</kbd></dt><dd>Replay: play / pause</dd>
     <dt><kbd>←</kbd> <kbd>→</kbd></dt><dd>Replay: back / forward 10 s (<kbd>Shift</kbd> for 1 min)</dd>
+    <dt><kbd>,</kbd> <kbd>.</kbd></dt><dd>Replay: previous / next flag or chapter (Q1, Q2, Q3...)</dd>
     <dt><kbd>L</kbd></dt><dd>Back to live</dd>
     <dt><kbd>+</kbd> <kbd>-</kbd></dt><dd>Delay up / down 5 s (live)</dd>
     <dt><kbd>Esc</kbd></dt><dd>Close whatever is open</dd>
@@ -725,6 +830,7 @@
       <select id="radiodrv" onchange="radioFilter()"><option value="">All drivers</option></select>
       <button class="btn" onclick="radioPlayAll()">▶ Play all in order</button>
       <label class="switch" style="font-weight:600"><input type="checkbox" id="radioauto"> Auto-play new messages</label>
+      <label class="switch" style="font-weight:600" title="F1 puts the same ~1.7 s sound at the start of most clips. Only the part that exactly matches it is skipped - never the radio itself."><input type="checkbox" id="radioskip" onchange="store.set('radioSkip', this.checked)"> Skip F1's intro sting</label>
       <a class="btn" id="radiozip" href="/api/radio_zip" download>⬇ Download all (zip)</a>
       <label class="switch" style="font-weight:600"><input type="checkbox" id="radioflagged" onchange="radioFilter()"> Flagged only</label>
       <span class="muted" id="radiocount"></span></div>
@@ -936,9 +1042,51 @@ function renderMode(d) {
     $("speedsel").value = String(rs.speed);
     $("replayname").textContent = r.name;
     if (!scrubbing) $("scrub").value = Math.round((vnow() - a) / (b - a) * 1000);
-    const MK = {red: "#e10600", sc: "#ffb000", vsc: "#ffb000", chequered: "#fff"};
-    $("markers").innerHTML = r.markers.map(m => `<i class="mk" style="left:${(new Date(m.t) - a) / (b - a) * 100}%;background:${MK[m.kind]}" title="${esc(m.kind)} L${m.lap ?? ""}"></i>`).join("");
+    renderTimeline(r, a, b);
   }
+}
+/* ---------- replay timeline: chapters (Q1/Q2/Q3, race start), flags and shaded spans; click to jump ---------- */
+const TL = {key: "", events: []};
+const TL_NAME = {red: "Red flag", sc: "Safety Car", vsc: "Virtual Safety Car", restart: "Restart", chequered: "Chequered flag", chapter: ""};
+function renderTimeline(r, a, b) {
+  const tl = r.timeline || {events: [], bands: []};
+  const pct = t => Math.max(0, Math.min(100, (new Date(t || r.t) - a) / (b - a) * 100));
+  TL.events = tl.events;
+  $("bands").style.setProperty("--p", pct(vnow()) + "%");
+  // the active chapter, from the replay clock (cheap, every frame)
+  const now = vnow().getTime(), chapters = tl.events.filter(e => e.kind === "chapter");
+  const cur = chapters.filter(e => new Date(e.t) - e.lead * 1000 <= now).pop();
+  document.querySelectorAll("#chapters .btn").forEach(x => x.classList.toggle("on", !!cur && x.dataset.t === cur.t));
+  // markers and buttons only when something changed: rebuilding them under the mouse would eat clicks
+  const key = JSON.stringify([tl, a, b]);
+  if (key === TL.key) return;
+  TL.key = key;
+  let alt = false;
+  $("bands").innerHTML = tl.bands.map(x => {
+    const l = pct(x.from), w = Math.max(0.2, pct(x.to) - l);
+    const cls = x.kind === "seg" ? `b-seg${(alt = !alt) ? "" : " alt"}` : "b-red";
+    return `<i class="${cls}" style="left:${l}%;width:${w}%"></i>`;
+  }).join("");
+  $("markers").innerHTML = tl.events.map((e, i) => {
+    const what = e.kind === "chapter" ? e.label : TL_NAME[e.kind] || e.kind;
+    const tip = `${what} · ${new Date(e.t).toLocaleTimeString()}${e.lap ? " · lap " + e.lap : ""}${e.text && e.kind !== "chapter" ? "\n" + e.text : ""}\nClick to jump there`;
+    return `<button class="mk ${e.kind === "chapter" ? "lbl" : "dot"} k-${e.kind}" style="left:${pct(e.t)}%" title="${esc(tip)}"
+      onclick="jumpTo(${i})">${e.kind === "chapter" ? esc(e.label) : ""}</button>`;
+  }).join("");
+  $("chapters").innerHTML = chapters.length > 1 ? chapters.map(e =>
+    `<button class="btn" data-t="${esc(e.t)}" onclick="jumpTo(${tl.events.indexOf(e)})" title="Jump to the start of ${esc(e.label)}">${esc(e.label)}</button>`).join("")
+    + `<button class="btn" onclick="jumpEvent(-1)" title="Previous flag or chapter (,)">⏮</button><button class="btn" onclick="jumpEvent(1)" title="Next flag or chapter (.)">⏭</button>` : "";
+}
+function jumpTo(i) {      // a little before the moment, to see it happen (90 s before a chequered flag: the last laps)
+  const e = TL.events[i];
+  if (e) ctl({at: new Date(new Date(e.t).getTime() - e.lead * 1000).toISOString()});
+}
+function jumpEvent(dir) {
+  if (!D || !D.replay) return;
+  const now = vnow().getTime(), at = e => new Date(e.t).getTime() - e.lead * 1000;
+  const list = TL.events.map((e, i) => [at(e), i]).sort((x, y) => x[0] - y[0]);
+  const hit = dir > 0 ? list.find(([t]) => t > now + 2000) : list.filter(([t]) => t < now - 3000).pop();
+  if (hit) jumpTo(hit[1]);
 }
 // restore saved settings once the server answers
 let restored = false;
@@ -1876,6 +2024,18 @@ function trackSVG(d, W, opts = {}) {
       track += `<path d="${line(seg)}" fill="none" stroke="${col}" stroke-width="${opts.labels ? 5 : 3.5}" stroke-linecap="round" class="${cls}"><title>Marshal sector ${sec.number}${f ? ": " + f : ""}</title></path>`;
     });
   } else if (pts.length) track += `<path d="${line(pts)}Z" fill="none" stroke="#596075" stroke-width="2"/>`;
+  // start/finish line: both outline sources begin at the line, so draw a chequered bar across pts[0]
+  if (pts.length > 4) {
+    const [x0, y0] = pts[0], a = pts[pts.length - 3], b = pts[3];
+    let dx = b[0] - a[0], dy = b[1] - a[1];
+    const len = Math.hypot(dx, dy) || 1; dx /= len; dy /= len;
+    const half = sw / 2 + 3, cell = opts.labels ? 4 : 3, nx = -dy, ny = dx;
+    const ang = Math.atan2(ny, nx) * 180 / Math.PI, n = Math.round(2 * half / cell);
+    let sq = "";
+    for (let i = 0; i < n; i++) for (let j = 0; j < 2; j++)
+      sq += `<rect x="${(-half + i * cell).toFixed(1)}" y="${(j - 1) * cell}" width="${cell}" height="${cell}" fill="${(i + j) % 2 ? "#111" : "#fff"}"/>`;
+    track += `<g transform="translate(${x0.toFixed(1)},${y0.toFixed(1)}) rotate(${ang.toFixed(1)})"><title>Start / finish</title>${sq}</g>`;
+  }
   // corners
   let corners = "";
   if (opts.corners) (m.corners || []).forEach(c => {
@@ -1943,9 +2103,11 @@ function teammateDash(list) {   // second car of a team gets a dashed line
 const isRaceSession = d => /^(race|sprint)$/i.test((d && d.session) || "");
 function redPanel(d) {
   const r = d.rc && d.rc.red_flag;
-  if (!r) return "";
+  if (!r || r.state === "closed" || airState() === "ended") return "";     // over and done with: not news any more
   const race = isRaceSession(d), Q = d.quali && d.quali.phase ? d.quali : null;
-  const what = race ? "RACE" : Q ? Q.label : "SESSION";
+  // qualifying: name the segment that was stopped, not whichever one is running now
+  const seg = Q && Q.label.startsWith("SQ") ? "SQ" : "Q";
+  const what = race ? "RACE" : r.phase ? seg + r.phase : Q ? Q.label : "SESSION";
   if (r.state === "resumed") {
     const mins = Math.floor(r.duration_s / 60), secs = r.duration_s % 60;
     if ((vnow() - new Date(r.resumed_at)) > 15 * 60 * 1000) return "";
@@ -2047,6 +2209,7 @@ function renderHeader(d) {
   $("om").textContent = "OVERTAKE MODE " + (d.overtake_mode == null ? "?" : d.overtake_mode ? "ON" : "OFF");
   $("meta").innerHTML = d.mode === "replay" ? `Replay · showing ${new Date(d.now).toLocaleTimeString()}` :
     `Live data from OpenF1${d.settings && d.settings.delay ? ` · <b class="blue">shown ${d.settings.delay}s late</b>` : ""}<br>Data time ${d.now ? new Date(d.now).toLocaleTimeString() : "-"} · <span class="age" id="age">${AGE.shown == null ? "" : AGE.shown <= 1 ? "data up to date" : `data ~${AGE.shown} s behind`}</span>`;
+  offAirHeader();
   const msgs = (d.rc && d.rc.messages) || [];
   const newRc = msgs.length - seenRc;
   if (activeTab === "rc") seenRc = msgs.length;
@@ -2146,7 +2309,9 @@ function renderLive(d) {
     const x = qx(r), v = x["q" + k];
     return `<td class="r ${Q.phase === k && !x.out_in ? "qseg" : "muted"}">${v != null ? fmtLap(v) : ""}</td>`;
   };
-  $("tower").innerHTML = d.rows.map((r, i) => {
+  $("tower").innerHTML = !n ? `<tr><td colspan="16" class="muted" style="padding:28px 14px;text-align:center">${airState() === "upcoming"
+    ? `No timing yet - ${esc(d.session || "the session")} starts ${cdShort(new Date(d.session_start) - Date.now())}.` : "No timing data for this session yet."}</td></tr>`
+    : d.rows.map((r, i) => {
     const moved = lastPos[r.number] && lastPos[r.number] !== r.pos;
     const gained = r.grid ? r.grid - r.pos : null;
     const comp = r.compound || "UNKNOWN";
@@ -2305,7 +2470,7 @@ function renderDriver(d) {
 
 // Team radio is rendered incrementally: an <audio> that is playing is never rebuilt (rebuilding it on every
 // update was what cut clips off). New messages are added on top; a new session starts a fresh list.
-const RADIO = {session: null, seen: new Set(), queue: [], playingAll: false, rows: new Map(), text: new Map(), loaded: false, toasted: new Set()};
+const RADIO = {skip: new Map(), session: null, seen: new Set(), queue: [], playingAll: false, rows: new Map(), text: new Map(), loaded: false, toasted: new Set()};
 function radioRow(r) {
   const el = document.createElement("div");
   el.className = "msg radio"; el.dataset.num = r.number;
@@ -2316,7 +2481,15 @@ function radioRow(r) {
     <audio controls preload="none" src="${esc(r.url)}"></audio>
     <a class="btn" href="${esc(dl)}" download title="Download this clip">⬇</a>
     <div class="rtext wait"></div><div class="rtags"></div>`;
-  el.querySelector("audio").addEventListener("ended", radioNext);
+  const au = el.querySelector("audio");
+  au.addEventListener("ended", radioNext);
+  // starting from the top: jump past F1's intro sting (the server measured how much of it this clip has)
+  au.addEventListener("play", () => {
+    const skip = RADIO.skip.get(r.url);
+    if (!$("radioskip").checked || !skip || au.currentTime > 0.05) return;
+    const go = () => { if (au.currentTime < skip) au.currentTime = skip; };
+    au.readyState >= 1 ? go() : au.addEventListener("loadedmetadata", go, {once: true});
+  });
   RADIO.rows.set(r.url, el);
   return el;
 }
@@ -2324,6 +2497,7 @@ function renderRadio(d) {
   const list = $("radiolist");
   if (RADIO.session !== d.session_key) { RADIO.session = d.session_key; RADIO.seen = new Set(); RADIO.queue = []; RADIO.rows = new Map(); RADIO.text = new Map(); RADIO.loaded = false; RADIO.toasted = new Set(); list.innerHTML = ""; }
   const fresh = (d.radio || []).filter(r => r.url && !RADIO.seen.has(r.url));
+  (d.radio || []).forEach(r => { if (r.skip != null) RADIO.skip.set(r.url, r.skip); });
   if (!d.radio || !d.radio.length) { if (!list.children.length) list.innerHTML = `<div class="msg muted empty">No team radio published for this session yet.</div>`; }
   const first = !RADIO.seen.size;
   // d.radio is newest first: insert the new ones above what's there, keeping that order
@@ -2430,6 +2604,7 @@ function radioKwSave() {
 }
 function radioKwReset() { $("radiokw").value = RADIO_KW_DEFAULT; radioKwSave(); }
 $("radiokw").value = store.get("radioKw", RADIO_KW_DEFAULT);
+$("radioskip").checked = store.get("radioSkip", true);
 radioKwLoad($("radiokw").value);
 
 function radioBusy() { return [...document.querySelectorAll("#radiolist audio")].some(a => !a.paused && !a.ended); }
@@ -2553,6 +2728,7 @@ document.addEventListener("keydown", e => {
   if (k >= "0" && k <= "9") openTab(DIGIT_TABS[(+k + 9) % 10]);
   else if (k === "[" || k === "]") openTab(TAB_ORDER[(TAB_ORDER.indexOf(activeTab) + (k === "]" ? 1 : TAB_ORDER.length - 1)) % TAB_ORDER.length]);
   else if (k === "h" || k === "H") openTab("home");
+  else if ((k === "," || k === ".") && rep) jumpEvent(k === "." ? 1 : -1);
   else if (k === "s" || k === "S") toggleDrawer();
   else if (k === "m" || k === "M") openPip();
   else if (k === "?") toggleHelp();
@@ -2676,6 +2852,27 @@ function homeSeason() {
       <span class="st">${new Date(c.date).toLocaleDateString([], {day: "numeric", month: "short"})}</span><span class="t">${esc(c.country || "")}</span></div>`).join("")
     : `<div class="empty">No more rounds this season.</div>`;
 }
+// Live mode, following a session that isn't running: "upcoming" (not started) or "ended". The schedule alone
+// isn't enough - a red flag can run a session well past its planned end - so "ended" also needs the data to have
+// gone quiet, and "upcoming" needs there to be none yet.
+function airState() {
+  if (!D || D.mode !== "live" || D.error || (H && H.state === "live")) return "on";
+  const now = Date.now(), quiet = !D.last_event || now / 1000 - D.last_event > 600;
+  if (D.session_start && now < new Date(D.session_start).getTime() && !(D.rows || []).length) return "upcoming";
+  if (D.session_end && now > new Date(D.session_end).getTime() && quiet) return "ended";
+  return "on";
+}
+function offAirHeader() {   // header while nothing is on: no "live" chips, and when the next session starts
+  const air = airState(), off = air !== "on";
+  document.body.classList.toggle("offair", off);
+  if (!off) return;
+  const now = Date.now(), nx = air === "upcoming" ? {name: D.session, meeting: D.meeting, start: D.session_start} : H && H.next;
+  const fc = $("feedchip");
+  fc.className = "feedchip"; fc.textContent = "OFF AIR";
+  fc.title = "No session running. The app checks every minute and switches to the next session when it starts.";
+  $("meta").innerHTML = air === "upcoming" ? `Session not started yet<br>${esc(nx.name || "")} <b>${cdShort(new Date(nx.start) - now)}</b>`
+    : nx ? `No session running<br>Next: ${esc(nx.name)} · ${esc(nx.meeting || "")} <b>${cdShort(new Date(nx.start) - now)}</b>` : "No session running";
+}
 function tickHome() {     // once a second: the countdowns, and the "session has ended" bar on live timing
   const now = Date.now();
   document.querySelectorAll("[data-cdto]").forEach(el => {
@@ -2684,10 +2881,13 @@ function tickHome() {     // once a second: the countdowns, and the "session has
   });
   document.querySelectorAll("[data-cdshort]").forEach(el => el.textContent = cdShort(new Date(el.dataset.cdshort) - now));
   const bar = $("endedbar");
-  const ended = H && D && D.mode === "live" && D.session_end && H.state !== "live" && now > new Date(D.session_end).getTime();
-  bar.classList.toggle("hidden", !ended);
+  const air = airState(), ended = air === "ended";
+  bar.classList.toggle("hidden", air === "on");
+  if (air === "upcoming") bar.innerHTML = `⏱ <span><b>${esc(D.session || "This session")} hasn't started yet</b> - it starts <b>${cdShort(new Date(D.session_start) - now)}</b> (${fmtWhen(D.session_start)}). Timing appears here as soon as it does.</span>
+    <button class="btn" onclick="openTab('home')">Home</button>`;
   if (ended) bar.innerHTML = `🏁 <span><b>This session has finished.</b> ${H.next ? `Next: ${esc(H.next.name)} · ${esc(H.next.meeting)} <b>${cdShort(new Date(H.next.start) - now)}</b>` : ""}</span>
     <button class="btn" onclick="openTab('home')">Home</button><button class="btn" onclick="replaySession(${+D.session_key})">Replay it</button>`;
+  offAirHeader();
 }
 function replaySession(key) { openTab("live"); ctl({mode: "replay", session: key, at: -120, play: 1}); }
 function downloadIcs() {

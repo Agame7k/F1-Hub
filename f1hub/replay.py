@@ -5,6 +5,7 @@ so nothing from "the future" (results, flags, points) can leak through - spoiler
 Full-session endpoints are fetched once and filtered in memory; location and car_data
 are too big for that, so they're fetched in small windows that end at T.
 """
+import re
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -22,29 +23,81 @@ def _ts(s):
     return datetime.fromisoformat(s).timestamp() if s else None
 
 
+SETTLE = 600            # s: OpenF1 is still filling in a session for a few minutes after it ends
+NO_END_MESSAGE = 6 * 3600   # s past the schedule: a session whose closing message never came is over anyway
+
+
+def _stamp(rows):
+    for r in rows:
+        r["_ts"] = _ts(r.get("date") or r.get("date_start"))
+    return rows
+
+
 class SessionStore:
-    """Full-session rows per endpoint, shared between replay trackers of the same session."""
+    """Full-session rows per endpoint, shared between replay trackers of the same session.
+
+    Data is only treated as final - cached for good - once race control says the session is over (in qualifying,
+    the end of Q3) and OpenF1 has had SETTLE seconds to catch up. The scheduled date_end is no guide: red flags
+    can run a session long past it, and a copy cached then would be missing everything after."""
 
     def __init__(self, session):
         self.session = session
         self.key = session["session_key"]
         self.rows = {}
         self.loaded_at = {}
+        self._final = None       # real end (epoch s) once race control shows the session is over
+
+    def _final_end(self, rc):
+        name = self.session.get("session_name") or ""
+        sched = _ts(self.session.get("date_end")) or 0
+        status = [r for r in rc if r.get("category") == "SessionStatus" and r["_ts"]]
+        if status:
+            last = max(status, key=lambda r: r["_ts"])
+            up = (last.get("message") or "").upper()
+            done = any(w in up for w in ("FINISHED", "FINALISED", "ENDS"))
+            if done and re.search(r"qualifying|shootout", name, re.I) and last.get("qualifying_phase") not in (None, 3):
+                done = False     # only Q1 or Q2 has ended
+            if done:
+                return max(sched, last["_ts"])
+        if time.time() > sched + NO_END_MESSAGE:
+            return max([sched] + [r["_ts"] for r in status])
+        return None
 
     @property
     def finished(self):
-        end = _ts(self.session.get("date_end"))
-        return end is not None and time.time() > end + 3600
+        return self._final is not None and time.time() > self._final + SETTLE
+
+    def actual_end(self):
+        """When the session really finished (or the latest sign of it so far, while it may still be running)."""
+        rc = self.get("race_control", time.time())
+        if self._final:
+            return datetime.fromtimestamp(self._final, timezone.utc)
+        done = [r["_ts"] for r in rc if r.get("category") == "SessionStatus" and r["_ts"]]
+        return datetime.fromtimestamp(max([_ts(self.session.get("date_end")) or 0] + done), timezone.utc)
+
+    def _load(self, endpoint):
+        if endpoint == "race_control":
+            # a cached copy (if any) says whether the session is over; only trust it if saved after it settled
+            rows = _stamp(api.get(endpoint, ttl=api.FOREVER, session_key=self.key))
+            final = self._final_end(rows)
+            if final is not None and time.time() > final + SETTLE:
+                rows = api.get(endpoint, ttl=api.FOREVER, fetched_after=final + SETTLE, session_key=self.key)
+            else:
+                rows = api.get(endpoint, ttl=20, session_key=self.key)
+            rows = _stamp(rows)
+            self._final = self._final_end(rows)
+            return rows
+        if self._final is None and "race_control" not in self.rows:
+            self.get("race_control", time.time())        # learn whether (and when) the session ended first
+        if self.finished:
+            return _stamp(api.get(endpoint, ttl=api.FOREVER, fetched_after=self._final + SETTLE, session_key=self.key))
+        return _stamp(api.get(endpoint, ttl=20, session_key=self.key))
 
     def get(self, endpoint, upto_ts):
         stale = (not self.finished and endpoint in self.rows
                  and upto_ts > self.loaded_at[endpoint] - 15 and time.time() - self.loaded_at[endpoint] > 20)
         if endpoint not in self.rows or stale:
-            ttl = api.FOREVER if self.finished else 20
-            rows = api.get(endpoint, ttl=ttl, session_key=self.key)
-            for r in rows:
-                r["_ts"] = _ts(r.get("date") or r.get("date_start"))
-            self.rows[endpoint] = rows
+            self.rows[endpoint] = self._load(endpoint)
             self.loaded_at[endpoint] = time.time()
         return self.rows[endpoint]
 
@@ -150,23 +203,66 @@ class ReplayTracker(LiveTracker):
                 return False
         return True
 
-    # ----------------------------------------------------------------- markers for the scrubber (only up to T)
-    def markers(self):
+    # ----------------------------------------------------------------- the scrub bar's timeline
+    def timeline(self, spoiler=True):
+        """Chapters, flags and shaded spans over the whole session, for finding your way around a replay.
+        Chapter starts (Q1/Q2/Q3, the race start) are always given - that's how you jump to Q3. Everything else past
+        the replay clock (red flags, safety cars, restarts, chequered flags, how long a segment ran) is left out while
+        spoiler mode is on: it would give away what's coming."""
         T = self._t.timestamp()
-        out = []
-        for m in self.store.get("race_control", T):
-            if m["_ts"] > T:
-                continue
+        name = self.session.get("session_name") or ""
+        quali = bool(re.search(r"qualifying|shootout", name, re.I))
+        seg = "SQ" if quali and re.search(r"sprint", name, re.I) else "Q"
+        events, bands = [], []
+        started, seg_open, red_open = set(), None, None
+
+        def ev(m, kind, label="", lead=20):
+            events.append({"t": m["date"], "kind": kind, "label": label, "lap": m.get("lap_number"), "lead": lead,
+                           "text": m.get("message")})
+
+        for m in sorted(self.store.get("race_control", T), key=lambda m: m["_ts"] or 0):
             up = (m.get("message") or "").upper()
-            kind = None
-            if is_red_flag(m):
-                kind = "red"
+            status = m.get("category") == "SessionStatus"
+            phase = m.get("qualifying_phase")
+            if status and "STARTED" in up:
+                if red_open:
+                    bands.append({"kind": "red", "from": red_open, "to": m["date"]})
+                    red_open = None
+                if phase not in started:
+                    started.add(phase)
+                    label = f"{seg}{phase}" if quali and phase else "Start"
+                    ev(m, "chapter", label, lead=15)
+                    seg_open = (label, m["date"])
+                else:
+                    ev(m, "restart", "Restart", lead=15)
+            elif is_red_flag(m) and not status:
+                ev(m, "red", lead=20)
+                red_open = red_open or m["date"]
             elif "VIRTUAL SAFETY CAR DEPLOYED" in up or "VSC DEPLOYED" in up:
-                kind = "vsc"
+                ev(m, "vsc", lead=30)
             elif "SAFETY CAR DEPLOYED" in up:
-                kind = "sc"
-            elif m.get("flag") == "CHEQUERED":
-                kind = "chequered"
-            if kind:
-                out.append({"t": m["date"], "kind": kind, "lap": m.get("lap_number")})
-        return out
+                ev(m, "sc", lead=30)
+            elif status and ("FINISHED" in up or "ENDS" in up):
+                if seg_open:
+                    bands.append({"kind": "seg", "label": seg_open[0], "from": seg_open[1], "to": m["date"]})
+                    seg_open = None
+                if red_open:          # stopped and never restarted ("Q2 will not be resumed")
+                    bands.append({"kind": "red", "from": red_open, "to": m["date"]})
+                    red_open = None
+                ev(m, "chequered", lead=90)
+        now = datetime.fromtimestamp(T, timezone.utc).isoformat()
+        if seg_open:
+            bands.append({"kind": "seg", "label": seg_open[0], "from": seg_open[1], "to": None})
+        if red_open:
+            bands.append({"kind": "red", "from": red_open, "to": None})
+        if spoiler:
+            events = [e for e in events if e["kind"] == "chapter" or _ts(e["t"]) <= T]
+            cut = []
+            for b in bands:
+                if _ts(b["from"]) > T:
+                    continue
+                if b["to"] is None or _ts(b["to"]) > T:
+                    b = dict(b, to=now)       # still running as far as you know
+                cut.append(b)
+            bands = cut
+        return {"events": events, "bands": bands}

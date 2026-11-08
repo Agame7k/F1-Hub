@@ -156,10 +156,14 @@ class RaceControl:
         if kind == "red" and (self.red is None or self.red["state"] != "suspended"):
             self.red = {"state": "suspended", "since": date, "lap": lap, "resume_at": None, "resume_local": None,
                         "order": [], "push_to_front": [], "start_type": None, "signals": [], "pit_exit": None,
-                        "resumed_at": None, "resumed_lap": None, "duration_s": None}
+                        "resumed_at": None, "resumed_lap": None, "duration_s": None,
+                        "phase": m.get("qualifying_phase")}     # qualifying: the segment it stopped (1/2/3)
             self.red_history.append(self.red)
             return
         r = self.red
+        if r and r["state"] == "abandoned" and kind == "session" and "STARTED" in up:
+            r["state"] = "closed"       # qualifying: the next segment has begun, so that stoppage is history
+            return
         if not r or r["state"] != "suspended":
             return
         if "NOT BE RESUMED" in up or "WILL NOT RESUME" in up or "NOT BE RESTARTED" in up:
