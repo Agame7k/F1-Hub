@@ -1,0 +1,22 @@
+# Secrets: your OpenF1 login (the .example template is committed)
+.openf1.env
+.env
+
+# Local data: API cache, live recordings, radio transcripts
+.f1cache/
+recordings/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+
+# Editor / tooling
+.claude/
+.vscode/
+.idea/
+.DS_Store
