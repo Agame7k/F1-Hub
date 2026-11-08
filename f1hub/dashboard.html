@@ -3,14 +3,53 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>F1 Hub Live</title>
+<title>F1 Hub</title>
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0b0c10">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Titillium+Web:ital,wght@0,400;0,600;0,700;0,900;1,700;1,900&family=Roboto+Mono:wght@500;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/dashboard.css">
 </head>
 <body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-home" viewBox="0 0 24 24"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/></symbol>
+  <symbol id="i-compass" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m16.24 7.76-2.12 6.36-6.36 2.12 2.12-6.36z"/></symbol>
+  <symbol id="i-settings" viewBox="0 0 24 24"><path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4"/></symbol>
+  <symbol id="i-pip" viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" rx="2"/><rect x="12" y="12" width="7" height="5" rx="1"/></symbol>
+  <symbol id="i-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3M12 17h.01"/></symbol>
+  <symbol id="i-trophy" viewBox="0 0 24 24"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6M18 9h1.5a2.5 2.5 0 0 0 0-5H18M4 22h16M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22M18 2H6v7a6 6 0 0 0 12 0V2Z"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24"><path d="M3 3v18h18M8 17v-4M13 17V8M18 17v-7"/></symbol>
+  <symbol id="i-activity" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></symbol>
+  <symbol id="i-trend" viewBox="0 0 24 24"><path d="m22 7-8.5 8.5-5-5L2 17M16 7h6v6"/></symbol>
+  <symbol id="i-map" viewBox="0 0 24 24"><path d="M3 6l6-3 6 3 6-3v15l-6 3-6-3-6 3zM9 3v15M15 6v15"/></symbol>
+  <symbol id="i-rec" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="4" fill="currentColor"/></symbol>
+  <symbol id="i-calendar" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></symbol>
+  <symbol id="i-eyeoff" viewBox="0 0 24 24"><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24M10.73 5.08A10.4 10.4 0 0 1 12 5c7 0 10 7 10 7a13.2 13.2 0 0 1-1.67 2.68M6.61 6.61A13.5 13.5 0 0 0 2 12s3 7 10 7a9.7 9.7 0 0 0 5.39-1.61M2 2l20 20"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3ZM12 9v4M12 17h.01"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4v16l13-8z" fill="currentColor"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><path d="M7 4h3v16H7zM14 4h3v16h-3z" fill="currentColor"/></symbol>
+  <symbol id="i-prev" viewBox="0 0 24 24"><path d="M19 20 9 12l10-8z" fill="currentColor"/><path d="M5 19V5"/></symbol>
+  <symbol id="i-next" viewBox="0 0 24 24"><path d="m5 4 10 8-10 8z" fill="currentColor"/><path d="M19 5v14"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="i-flag" viewBox="0 0 24 24"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1zM4 22v-7"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></symbol>
+  <symbol id="i-mic" viewBox="0 0 24 24"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3ZM19 10v2a7 7 0 0 1-14 0v-2M12 19v3"/></symbol>
+  <symbol id="i-doc" viewBox="0 0 24 24"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7ZM14 2v4a2 2 0 0 0 2 2h4M16 13H8M16 17H8"/></symbol>
+  <symbol id="i-rain" viewBox="0 0 24 24"><path d="M4 14.9A7 7 0 1 1 15.7 8h1.8a4.5 4.5 0 0 1 2.5 8.2M16 14v6M8 14v6M12 16v6"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></symbol>
+  <symbol id="i-loader" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-6.22-8.56"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0"/></symbol>
+  <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></symbol>
+  <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2 3 14h9l-1 8 10-12h-9z"/></symbol>
+  <symbol id="i-reset" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5"/></symbol>
+  <symbol id="i-cube" viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16zM3.3 7 12 12l8.7-5M12 22V12"/></symbol>
+  <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7"/></symbol>
+</svg>
 <header>
-  <div class="brand">F1<span>HUB</span></div>
+  <a class="brand" href="#home" title="Home (H)">F1<span>HUB</span></a>
   <div class="event" id="event">Connecting…</div>
   <div class="pill" id="status">-</div>
   <div class="lap"><div><span id="laplbl">Lap</span> <b class="num" id="lap">-</b> <span class="muted" id="lapof"></span></div><div class="bar"><i id="lapbar" style="width:0"></i></div></div>
@@ -20,17 +59,17 @@
   <div class="tools">
     <span class="feedchip" id="feedchip" title="How data is arriving from OpenF1"></span>
     <button class="modechip live" id="modechip" onclick="toggleDrawer()" title="Live / delayed / replay - click to change">LIVE</button>
-    <button class="gear celebbtn" id="celebbtn" title="Replay the celebration" aria-label="Replay the celebration" onclick="replayCelebration()">🏆</button>
-    <button class="gear" onclick="openPip()" title="Mini timing tower in a floating window (M)" aria-label="Mini timing tower">⧉</button>
-    <button class="gear statusbtn" id="statusbtn" onclick="toggleStatus()" title="Setup check (D)" aria-label="Setup check"><i class="dot"></i><span class="label"> Status</span></button>
-    <button class="gear" onclick="toggleHelp()" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">?</button>
-    <button class="gear" onclick="toggleDrawer()" title="Delay, spoilers and replay (S)" aria-label="Settings">⚙<span class="label"> Settings</span></button>
+    <button class="gear celebbtn" id="celebbtn" title="Replay the celebration" aria-label="Replay the celebration" onclick="replayCelebration()"><svg class="ico" aria-hidden="true"><use href="#i-trophy"/></svg></button>
+    <button class="gear" onclick="openPip()" title="Mini timing tower in a floating window (M)" aria-label="Mini timing tower"><svg class="ico" aria-hidden="true"><use href="#i-pip"/></svg></button>
+    <button class="gear statusbtn" id="statusbtn" onclick="toggleStatus()" title="Setup check (D)" aria-label="Setup check"><i class="dot"></i><span class="label">Status</span></button>
+    <button class="gear" onclick="toggleHelp()" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts"><svg class="ico" aria-hidden="true"><use href="#i-help"/></svg></button>
+    <button class="gear" onclick="toggleDrawer()" title="Delay, spoilers and replay (S)" aria-label="Settings"><svg class="ico" aria-hidden="true"><use href="#i-settings"/></svg><span class="label">Settings</span></button>
   </div>
 </header>
 <div id="syncbar" class="hidden"></div>
 <div id="scrubbar">
   <div class="row2" style="justify-content:space-between">
-    <div class="row2"><button class="btn" id="playbtn" onclick="togglePlay()">▶</button>
+    <div class="row2"><button class="btn iconbtn" id="playbtn" onclick="togglePlay()" aria-label="Play / pause"><svg class="ico" aria-hidden="true"><use href="#i-play"/></svg></button>
       <select id="speedsel" onchange="ctl({speed: this.value})"><option value="1">1×</option><option value="2">2×</option><option value="5">5×</option><option value="10">10×</option></select>
       <b id="replayname"></b><span class="chapters" id="chapters"></span></div>
     <div class="row2"><span class="num" id="replayclock"></span><button class="btn" onclick="seekRel(-60)">-1 min</button><button class="btn" onclick="seekRel(-10)">-10 s</button>
@@ -40,7 +79,7 @@
   <div class="scrub"><div id="markers"></div><div id="bands"></div><input type="range" id="scrub" min="0" max="1000" value="0"></div>
 </div>
 <aside id="drawer">
-  <section class="row2" style="justify-content:space-between"><b style="font-size:16px">Settings</b><button class="btn" onclick="toggleDrawer()">✕</button></section>
+  <section class="row2" style="justify-content:space-between"><b style="font-size:16px">Settings</b><button class="btn iconbtn" onclick="toggleDrawer()" aria-label="Close"><svg class="ico" aria-hidden="true"><use href="#i-x"/></svg></button></section>
   <section>
     <h3>No spoilers</h3>
     <label class="switch"><input type="checkbox" id="spoiler" onchange="ctl({spoiler: this.checked ? 1 : 0})"> Spoiler mode</label>
@@ -87,8 +126,9 @@
 <div id="crashbanner" class="hidden"></div>
 <div id="rulebox" class="hidden" onclick="if (event.target === this) closeRule()"><div class="in" id="rulein"></div></div>
 <div id="help" class="hidden" onclick="if (event.target === this) toggleHelp(false)"><div class="in">
-  <div class="row2" style="justify-content:space-between"><h3>Keyboard shortcuts</h3><button class="btn" onclick="toggleHelp(false)">✕</button></div>
+  <div class="row2" style="justify-content:space-between"><h3>Keyboard shortcuts</h3><button class="btn iconbtn" onclick="toggleHelp(false)" aria-label="Close"><svg class="ico" aria-hidden="true"><use href="#i-x"/></svg></button></div>
   <dl>
+    <dt><kbd>Ctrl</kbd> <kbd>K</kbd></dt><dd>Jump to any tab, driver or action</dd>
     <dt><kbd>H</kbd></dt><dd>Home - what's next, latest results, replays</dd>
     <dt><kbd>E</kbd></dt><dd>Explore - session analysis, telemetry lab, season stats, circuit preview, FastF1</dd>
     <dt><kbd>1</kbd> … <kbd>0</kbd></dt><dd>Switch tab (Live timing … Calendar)</dd>
@@ -108,14 +148,14 @@
 </div></div>
 <div id="statuspanel" class="hidden" onclick="if (event.target === this) toggleStatus(false)"><div class="in">
   <div class="row2" style="justify-content:space-between"><h3>Setup check</h3>
-    <div class="row2"><button class="btn" onclick="loadStatus()">Check again</button><button class="btn" onclick="toggleStatus(false)">✕</button></div></div>
+    <div class="row2"><button class="btn" onclick="loadStatus()">Check again</button><button class="btn iconbtn" onclick="toggleStatus(false)" aria-label="Close"><svg class="ico" aria-hidden="true"><use href="#i-x"/></svg></button></div></div>
   <div id="statuslist"><p class="muted">Checking…</p></div>
   <div id="statusrecent"></div>
   <p class="muted" style="margin-bottom:0">Log file: <code id="statuslog"></code><br>For the full check, including whether OpenF1 and its live
     stream answer, run <code>python3 -m f1hub doctor</code> in a terminal.</p>
 </div></div>
 <nav>
-  <button data-tab="home">🏠 Home</button>
+  <button data-tab="home"><svg class="ico" aria-hidden="true"><use href="#i-home"/></svg>Home</button>
   <button class="on" data-tab="live">Live timing</button>
   <button data-tab="rc">Race control <span class="badge hidden" id="rcbadge"></span></button>
   <button data-tab="map">Track map</button>
@@ -126,7 +166,7 @@
   <button data-tab="radio">Team radio</button>
   <button data-tab="champ">Championship</button>
   <button data-tab="cal">Calendar</button>
-  <button data-tab="explore">🔬 Explore</button>
+  <button data-tab="explore"><svg class="ico" aria-hidden="true"><use href="#i-compass"/></svg>Explore</button>
 </nav>
 <div id="offline" class="err hidden"></div>
 <div id="error" class="err hidden"></div>
@@ -140,18 +180,18 @@
   <div class="grid">
     <div class="stack">
       <div id="homeresults"></div>
-      <div class="card"><h2>Watch again <span class="sub">full replays on a virtual clock - spoiler free</span></h2><div class="pad replaybtns" id="homerecent"><span class="muted">…</span></div></div>
+      <div class="card"><h2>Watch again <span class="sub">full replays on a virtual clock - spoiler free</span></h2><div class="pad replaybtns" id="homerecent"><div class="skel"><i></i><i></i></div></div></div>
       <div class="card"><h2>Between sessions <span class="sub">dig into any session since 2018</span></h2><div class="pad replaybtns">
-        <button class="btn" onclick="xOpen('analysis')">📊 Session analysis<small>race pace, tyre wear, lap chart, team-mates</small></button>
-        <button class="btn" onclick="xOpen('lab')">🧪 Telemetry lab<small>any two laps, any session</small></button>
-        <button class="btn" onclick="xOpen('stats')">📈 Season stats<small>form, head-to-heads, averages</small></button>
-        <button class="btn" onclick="xOpen('ff1')">⏺ FastF1<small>older seasons, recordings</small></button></div></div>
+        <button class="btn" onclick="xOpen('analysis')"><span><svg class="ico" aria-hidden="true"><use href="#i-chart"/></svg>Session analysis</span><small>race pace, tyre wear, lap chart, team-mates</small></button>
+        <button class="btn" onclick="xOpen('lab')"><span><svg class="ico" aria-hidden="true"><use href="#i-activity"/></svg>Telemetry lab</span><small>any two laps, any session</small></button>
+        <button class="btn" onclick="xOpen('stats')"><span><svg class="ico" aria-hidden="true"><use href="#i-trend"/></svg>Season stats</span><small>form, head-to-heads, averages</small></button>
+        <button class="btn" onclick="xOpen('ff1')"><span><svg class="ico" aria-hidden="true"><use href="#i-rec"/></svg>FastF1</span><small>older seasons, recordings</small></button></div></div>
     </div>
     <div class="stack">
-      <div class="card"><h2><span id="homewkh">Weekend schedule</span> <span class="sub">your local time</span></h2><div id="homeweekend"></div></div>
-      <div class="card"><h2>Championship <button class="btn" style="padding:2px 8px;font-size:11px" onclick="openTab('champ')">Full standings</button></h2><div class="pad" id="homechamp"><span class="muted">…</span></div></div>
-      <div class="card"><h2>Coming up <button class="btn" style="padding:2px 8px;font-size:11px" onclick="openTab('cal')">Calendar</button></h2><div id="homecal"></div></div>
-      <div class="card"><h2><span id="homecirch">Circuit preview</span> <button class="btn" style="padding:2px 8px;font-size:11px" onclick="xOpen('circuit')">Full preview</button></h2><div id="homecircuit"><div class="empty">…</div></div></div>
+      <div class="card"><h2><span id="homewkh">Weekend schedule</span> <span class="sub">your local time</span></h2><div id="homeweekend"><div class="pad skel"><i></i><i></i><i></i><i></i><i></i></div></div></div>
+      <div class="card"><h2>Championship <button class="btn" style="padding:2px 8px;font-size:11px" onclick="openTab('champ')">Full standings</button></h2><div class="pad" id="homechamp"><div class="skel"><i></i><i></i><i></i><i></i></div></div></div>
+      <div class="card"><h2>Coming up <button class="btn" style="padding:2px 8px;font-size:11px" onclick="openTab('cal')">Calendar</button></h2><div id="homecal"><div class="pad skel"><i></i><i></i><i></i></div></div></div>
+      <div class="card"><h2><span id="homecirch">Circuit preview</span> <button class="btn" style="padding:2px 8px;font-size:11px" onclick="xOpen('circuit')">Full preview</button></h2><div id="homecircuit"><div class="pad skel"><i class="tall"></i></div></div></div>
     </div>
   </div>
 </main>
@@ -177,7 +217,7 @@
       <div class="card raceonly"><h2>Title fight - live</h2><div id="title"><div class="title pad muted">Waiting for championship data…</div></div></div>
       <div class="card nonraceonly hidden" id="gridcard"><h2><span id="gridh">Provisional starting grid</span>
           <select id="gridtarget" class="hidden" onchange="GRIDV.at = 0; loadGrid()"><option value="">Auto</option><option>Race</option><option>Sprint</option></select></h2>
-        <div id="pgrid"><div class="pad muted">…</div></div><div class="gridnote" id="gridnote"></div></div>
+        <div id="pgrid"><div class="pad skel"><i></i><i></i><i></i><i></i></div></div><div class="gridnote" id="gridnote"></div></div>
       <div class="card"><h2>Weather</h2><div class="wx pad" id="wx"><span class="muted">-</span></div></div>
       <div class="card"><h2>Race control <a href="#" class="muted" onclick="openTab('rc');return false" style="text-transform:none">all →</a></h2><div class="feed" id="rcmini" style="max-height:280px"></div></div>
     </div>
@@ -218,8 +258,22 @@
 <main id="tab-map" class="hidden">
   <div class="grid">
     <div class="card"><h2>Live track position <span class="sub" id="maphint"></span>
-      <label class="switch sub" style="float:right"><input type="checkbox" id="ghoston" onchange="toggleGhost(this.checked)"> 👻 Ghost of the fastest lap vs your selected driver</label></h2>
-      <div class="muted" id="ghostinfo" style="font-size:12px;padding:0 12px"></div><div id="bigmap" class="pad mapwrap"></div></div>
+      <div class="seg" id="mapview" role="group" aria-label="Map view"><button data-v="2d" class="on">2D</button><button data-v="3d">3D</button></div>
+      <label class="switch sub" title="Races the fastest lap against the car you select on the map"><input type="checkbox" id="ghoston" onchange="toggleGhost(this.checked)"> Ghost of the fastest lap</label></h2>
+      <div class="ghostinfo" id="ghostinfo"></div>
+      <div id="bigmap" class="pad mapwrap"></div>
+      <div id="map3d" class="hidden"><canvas id="m3dc" aria-label="3D track map: drag to rotate, scroll to zoom, click a car to select it"></canvas>
+        <div class="m3dbar">
+          <div class="seg" id="m3dcam" role="group" aria-label="Camera"><button data-c="orbit" class="on" title="Circle the whole circuit">Orbit</button><button data-c="follow" id="m3dfollow" title="Ride behind the selected car (or the leader)">Follow car</button></div>
+          <label class="switch" title="Turn slowly when you leave it alone"><input type="checkbox" id="m3dspin"> Spin</label>
+          <label class="m3dex" title="Real heights are small next to a 5 km lap: this stretches them so the hills show">Height <b id="m3dexv">3</b>×<input type="range" id="m3dex" min="1" max="8" step="0.5"></label>
+          <button class="gear iconbtn" id="m3dreset" title="Reset the view (double-click the map)" aria-label="Reset the view"><svg class="ico" aria-hidden="true"><use href="#i-reset"/></svg></button>
+        </div>
+        <div class="m3dhint">Drag to rotate · scroll to zoom · click a car</div>
+      </div>
+      <div class="maplegend"><span><i class="lg-y"></i>Yellow</span><span><i class="lg-yy"></i>Double yellow</span><span><i class="lg-g"></i>Just cleared</span>
+        <span><i class="lg-sc"></i>SC / VSC</span><span><i class="lg-me"></i>Selected car - click any car</span><span><i class="lg-push"></i>On a flying lap</span>
+        <span><i class="lg-ghost"></i>Ghost</span></div></div>
     <div class="card"><h2>Running order</h2><div class="feed" id="maporder" style="max-height:700px"></div></div>
   </div>
 </main>
@@ -294,10 +348,10 @@
     <div class="row2 pad"><input id="radiosearch" type="search" placeholder="Search what was said…" oninput="radioFilter()"
         style="background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:4px;padding:5px 8px;font:inherit;min-width:200px">
       <select id="radiodrv" onchange="radioFilter()"><option value="">All drivers</option></select>
-      <button class="btn" onclick="radioPlayAll()">▶ Play all in order</button>
+      <button class="btn" onclick="radioPlayAll()"><svg class="ico" aria-hidden="true"><use href="#i-play"/></svg>Play all in order</button>
       <label class="switch" style="font-weight:600"><input type="checkbox" id="radioauto"> Auto-play new messages</label>
       <label class="switch" style="font-weight:600" title="F1 puts the same ~1.7 s sound at the start of most clips. Only the part that exactly matches it is skipped - never the radio itself."><input type="checkbox" id="radioskip" onchange="store.set('radioSkip', this.checked)"> Skip F1's intro sting</label>
-      <a class="btn" id="radiozip" href="/api/radio_zip" download>⬇ Download all (zip)</a>
+      <a class="btn" id="radiozip" href="/api/radio_zip" download><svg class="ico" aria-hidden="true"><use href="#i-download"/></svg>Download all (zip)</a>
       <label class="switch" style="font-weight:600"><input type="checkbox" id="radioflagged" onchange="radioFilter()"> Flagged only</label>
       <span class="muted" id="radiocount"></span></div>
     <details class="pad" style="padding-top:0"><summary class="muted" style="cursor:pointer;font-size:12px">Alert words - flag and pop up radio messages that mention…</summary>
@@ -331,11 +385,11 @@
 <!-- EXPLORE: between sessions -->
 <main id="tab-explore" class="hidden">
   <div class="subnav" id="xnav">
-    <button data-x="analysis">📊 Session analysis</button>
-    <button data-x="lab">🧪 Telemetry lab</button>
-    <button data-x="stats">📈 Season stats</button>
-    <button data-x="circuit">🗺 Circuit preview</button>
-    <button data-x="ff1">⏺ FastF1 &amp; recordings</button>
+    <button data-x="analysis"><svg class="ico" aria-hidden="true"><use href="#i-chart"/></svg>Session analysis</button>
+    <button data-x="lab"><svg class="ico" aria-hidden="true"><use href="#i-activity"/></svg>Telemetry lab</button>
+    <button data-x="stats"><svg class="ico" aria-hidden="true"><use href="#i-trend"/></svg>Season stats</button>
+    <button data-x="circuit"><svg class="ico" aria-hidden="true"><use href="#i-map"/></svg>Circuit preview</button>
+    <button data-x="ff1"><svg class="ico" aria-hidden="true"><use href="#i-rec"/></svg>FastF1 &amp; recordings</button>
     <span class="xnote" id="xff1chip"></span>
   </div>
   <div id="xsess" class="xpick hidden">
@@ -374,9 +428,11 @@
 <script src="/static/extras.js"></script>
 <script src="/static/stewards.js"></script>
 <script src="/static/render.js"></script>
+<script src="/static/map3d.js"></script>
 <script src="/static/explore.js"></script>
 <script src="/static/home.js"></script>
 <script src="/static/status.js"></script>
+<script src="/static/polish.js"></script>
 <script src="/static/main.js"></script>
 <div id="celeb" onclick="closeCelebration()"><canvas id="fx"></canvas><div class="stage" id="cstage"></div><div class="c-hint">click anywhere to close</div></div>
 </body>

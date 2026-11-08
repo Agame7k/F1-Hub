@@ -31,7 +31,7 @@ function driverCard(code) {
   $("dcardin").style.setProperty("--tc", e.colour);
   $("dcardin").innerHTML = `<div class="dc-head">${row && row.headshot ? `<img src="${esc(row.headshot)}" onerror="this.remove()">` : ""}
       <div style="flex:1"><h3 style="color:${esc(e.colour)}">${esc(e.name)}</h3><div class="muted">${esc(e.team)} · ${S.year} season${e.alive ? ' · <span class="up">still in title contention</span>' : ""}</div></div>
-      <button class="btn" onclick="$('dcard').classList.add('hidden')">✕</button></div>
+      <button class="btn iconbtn" aria-label="Close" onclick="$('dcard').classList.add('hidden')">${ico("x")}</button></div>
     <div class="dc-stats">${stats.map(x => `<div><b>${esc(x[1])}</b><span>${x[0]}</span></div>`).join("")}</div>
     <h2>Race by race</h2>
     <div class="finrow">${fins.map((f, k) => { const r = done[k], cls = !f ? "dnf" : f <= 3 ? "p" + f : f <= 10 ? "pts" : "";
@@ -83,7 +83,7 @@ function renderSim(s) {
     return `<tr><td class="muted num">R${r.round}</td><td>${esc(r.name)}${r.round === s.completed + 1 && D && D.mode === "live" ? ' <span class="pill" style="background:#e10600;color:#fff;padding:1px 6px;border-radius:3px;font-size:10px">LIVE</span>' : ""}${sprintCells}</td>
       <td><select onchange="SIM.picks['${leader.code}.${r.round}.gp']=+this.value;renderSim(S)">${opts(lp)}</select></td>
       <td><select onchange="SIM.picks['${rival.code}.${r.round}.gp']=+this.value;renderSim(S)">${opts(rp)}</select></td>
-      <td class="r num"><b>${L}</b> - <b>${R}</b></td><td class="muted">${decided && decided.round === r ? "🏆 decided" : ""}</td></tr>`;
+      <td class="r num"><b>${L}</b> - <b>${R}</b></td><td class="muted">${decided && decided.round === r ? ico("trophy") + "decided" : ""}</td></tr>`;
   }).join("");
   const champ = L === R ? null : L > R ? leader : rival;
   el.innerHTML = `<div class="row2" style="margin-bottom:8px"><span>${esc(leader.name)} (${leader.points}) vs</span>
@@ -92,7 +92,7 @@ function renderSim(s) {
       <button class="btn" onclick="simWorst()">Rival wins everything</button></div>
     <div class="simgrid"><table class="num"><thead><tr><th></th><th>Round</th><th style="color:${esc(leader.colour)}">${esc(leader.code)}</th><th style="color:${esc(rival.colour)}">${esc(rival.code)}</th><th class="r">Running total</th><th></th></tr></thead>
     <tbody>${rowsHtml}</tbody></table></div>
-    <div class="simres ${champ ? "win" : ""}">${champ ? `🏆 ${esc(champ.name)} would be champion by ${Math.abs(L - R)} points${decided ? ` - settled at the ${esc(decided.round.name)}` : " - at the final round"}.`
+    <div class="simres ${champ ? "win" : ""}">${champ ? `${ico("trophy")}${esc(champ.name)} would be champion by ${Math.abs(L - R)} points${decided ? ` - settled at the ${esc(decided.round.name)}` : " - at the final round"}.`
       : "Dead heat on points - decided on countback (most wins, then most 2nds, ...)."}
       <div class="muted" style="font-weight:400;font-size:12px;margin-top:4px">Only these two drivers' results are simulated; others are assumed not to matter.</div></div>`;
 }

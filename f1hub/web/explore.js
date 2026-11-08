@@ -21,9 +21,9 @@ function vis(c) {
 // "revealed" switch as the Home page's result cards, so revealing in one place reveals it in both
 function xSpoilGate(key, what, retry) {
   if (!(D && D.settings ? D.settings.spoiler : true) || store.get("revealed." + key, false)) return "";
-  return `<div class="card"><div class="empty" style="padding:40px 14px">🙈 <b>${esc(what)}</b><br>Spoiler mode is on and you haven't revealed this result yet.
+  return `<div class="card"><div class="empty" style="padding:40px 14px">${ico("eyeoff")}<b>${esc(what)}</b><br>Spoiler mode is on and you haven't revealed this result yet.
     <div class="row2" style="justify-content:center;margin-top:12px"><button class="btn primary" onclick="store.set('revealed.${esc(String(key))}', true); ${retry}">Show it</button>
-    <button class="btn" onclick="replaySession(${+key || 0})">▶ Replay it first</button></div></div></div>`;
+    <button class="btn" onclick="replaySession(${+key || 0})">${ico("play")}Replay it first</button></div></div></div>`;
 }
 function xRecentSession(key) {      // started in the last 10 days?
   const all = Object.values(XP.sessions).flat(), x = all.find(s => String(s.key) === String(key));
@@ -35,7 +35,7 @@ async function xJSON(url) {
   if (!r.ok || (j && j.error && !j.history)) throw new Error((j && j.error) || "HTTP " + r.status);
   return j;
 }
-function xErr(e) { return `<div class="empty">⚠ ${esc(e.message || e)}</div>`; }
+function xErr(e) { return `<div class="empty">${ico("alert")}${esc(e.message || e)}</div>`; }
 function xShow(view) {
   if (!["analysis", "lab", "stats", "circuit", "ff1"].includes(view)) view = "analysis";
   XP.view = view; store.set("xview", view);
@@ -161,7 +161,7 @@ function xRenderAnalysis() {
       <div class="row2" style="margin-bottom:14px;justify-content:space-between">
         <div><b style="font-size:20px">${esc(s.meeting)} - ${esc(s.name)} ${s.year}</b> ${SRC_BADGE(a.source)}
           ${a.cut ? `<span class="tag" style="background:#3a1f4a;color:#e0a8ff">spoiler mode: up to ${fmtTime(a.cut)}</span>` : ""}</div>
-        <div class="row2"><button class="btn" onclick="replaySession(${+s.key})">▶ Replay it</button><button class="btn" onclick="xShow('lab')">🧪 Telemetry lab</button></div></div>
+        <div class="row2"><button class="btn" onclick="replaySession(${+s.key})">${ico("play")}Replay it</button><button class="btn" onclick="xShow('lab')">${ico("activity")}Telemetry lab</button></div></div>
       <div class="two">
         <div class="stack">
           ${race ? `<div class="card"><h2>Race pace <span class="sub">clean laps only: no lap 1, pit laps, SC/VSC or slow outliers · box = middle half, line = median</span></h2><div class="pad">${boxPlot(a.pace)}</div></div>` : ""}
@@ -227,7 +227,7 @@ async function labCompare() {
     XP.traces = {a: ta, b: tb && tb.samples ? tb : null};
     $("labnote").textContent = "";
     labRender();
-  } catch (e) { $("labnote").textContent = "⚠ " + e.message; }
+  } catch (e) { $("labnote").innerHTML = ico("alert") + esc(e.message); }
 }
 function tAtFrac(tr, f) { const s = tr.samples; let j = s.findIndex(x => x[1] >= f);
   if (j < 0) return s[s.length - 1][0]; if (j === 0) return s[0][0];
@@ -332,7 +332,7 @@ async function xStats() {
         <td><b>${esc(h.a)}</b> <span class="muted">v</span> ${esc(h.b)}</td>
         <td class="num">${h.quali[0]}-${h.quali[1]}${bar(h.quali[0], h.quali[1])}</td><td class="num">${h.race[0]}-${h.race[1]}${bar(h.race[0], h.race[1])}</td>
         <td class="r num">${h.points[0]} - ${h.points[1]}</td></tr>`; }).join("");
-    $("xstats").innerHTML = `${st.spoiler_hidden ? `<div class="note">🙈 Spoiler mode: the meeting you're watching delayed or replaying (and anything after) is left out.</div>` : ""}
+    $("xstats").innerHTML = `${st.spoiler_hidden ? `<div class="note">${ico("eyeoff")}Spoiler mode: the meeting you're watching delayed or replaying (and anything after) is left out.</div>` : ""}
       <div class="card"><h2>${year} drivers <span class="sub">${st.rounds.length} rounds · avg Q = qualifying position · +/- = places gained from the grid · Q3 = top-10 qualifying · PPR = points per round</span></h2><div class="scroll"><table>
         <thead><tr><th></th><th>Driver</th><th class="r">Pts</th><th class="r">Wins</th><th class="r">Pod</th><th class="r">Poles</th><th class="r">Avg Q</th><th class="r">Avg fin</th>
         <th class="r">+/-</th><th class="r">Q3</th><th class="r">Pts fin</th><th class="r">DNF</th><th class="r">PPR</th><th>Last 5</th></tr></thead><tbody>${rows}</tbody></table></div></div>
@@ -361,19 +361,11 @@ function xStatsDriver(code) {
 }
 
 /* ---- circuit preview ---- */
-function circuitSVG(m, W = 560) {
+function circuitSVG(m, W = 560, intro = true) {      // the same drawing as the live map, without cars
   if (!m || !m.outline) return `<div class="empty">No circuit map.</div>`;
-  const th = (m.rotation || 0) * Math.PI / 180, cs = Math.cos(th), sn = Math.sin(th), rot = (x, y) => [x * cs - y * sn, x * sn + y * cs];
-  const R = m.outline.map(p => rot(p[0], p[1])), xs = R.map(p => p[0]), ys = R.map(p => p[1]);
-  const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys), pad = 26;
-  const k = (W - 2 * pad) / (maxX - minX || 1), H = Math.round((maxY - minY) * k + 2 * pad);
-  const P = (x, y) => { const [u, v] = rot(x, y); return [pad + (u - minX) * k, H - (pad + (v - minY) * k)]; };
-  const path = m.outline.map((p, i) => (i ? "L" : "M") + P(p[0], p[1]).map(v => v.toFixed(1)).join(",")).join("") + "Z";
-  const corners = (m.corners || []).map(c => { const a = (c.angle || 0) * Math.PI / 180, [x, y] = P(c.x + Math.cos(a) * 420, c.y + Math.sin(a) * 420);
-    return `<text x="${x.toFixed(1)}" y="${(y + 4).toFixed(1)}" font-size="11" fill="#8b91a1" text-anchor="middle">${c.number}</text>`; }).join("");
-  const [sx, sy] = P(m.outline[0][0], m.outline[0][1]);
-  return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;max-height:58vh"><path d="${path}" fill="none" stroke="#2c303b" stroke-width="12" stroke-linejoin="round"/>
-    <path d="${path}" fill="none" stroke="#e10600" stroke-width="2.5" stroke-linejoin="round"/><circle cx="${sx}" cy="${sy}" r="6" fill="#fff"><title>Start / finish</title></circle>${corners}</svg>`;
+  const box = document.createElement("div");
+  paintTrack(box, {map: {outline: m.outline, corners: m.corners, rotation: m.rotation}, rc: {}, incidents: []}, W, {corners: true, accent: true, intro});
+  return `<div class="cprev">${box.innerHTML}</div>`;
 }
 const seqHTML = seq => `<span class="seq">${(seq || []).map(c => `<i style="border-color:${TYRE[c] || TYRE[{S: "SOFT", M: "MEDIUM", H: "HARD", I: "INTERMEDIATE", W: "WET"}[c]] || "#666"}" title="${esc(c)}"></i>`).join("")}</span>`;
 async function xCircuitData(mk) {
@@ -405,14 +397,14 @@ async function xCircuit() {
       <td class="r num" ${e.winner_grid_from === "quali" ? 'title="Qualifying position - OpenF1 has no starting grid for this race, so grid penalties are not included"' : ""}>${e.winner_grid == null ? "-" : (e.winner_grid_from === "quali" ? "Q" : "P") + e.winner_grid}</td><td>${e.pole ? `${esc(e.pole.code)} <span class="muted num">${e.pole.time ? fmtLap(e.pole.time) : ""}</span>` : "-"}</td>
       <td>${e.fastest ? `${esc(e.fastest.code)} <span class="muted num">${fmtLap(e.fastest.time)}</span>` : "-"}</td>
       <td>${seqHTML(e.winner_strategy)}</td><td class="r num">${e.sc ?? "-"} / ${e.vsc ?? "-"}${e.red ? ` / <span class="down">${e.red} red</span>` : ""}</td>
-      <td class="r num">${e.overtakes ?? "-"}</td><td>${e.weather ? (e.weather.rain ? "🌧" : "☀") + ` <span class="muted">${e.weather.track ?? "-"}°</span>` : ""}</td></tr>`;
+      <td class="r num">${e.overtakes ?? "-"}</td><td>${e.weather ? ico(e.weather.rain ? "rain" : "sun") + `<span class="muted">${e.weather.track ?? "-"}°</span>` : ""}</td></tr>`;
     const seqs = {}; eds.forEach(e => (e.sequences || []).forEach(([s, n]) => seqs[s] = (seqs[s] || 0) + n));
     const topSeq = Object.entries(seqs).sort((a, b) => b[1] - a[1]).slice(0, 5);
     $("xcircuit").innerHTML = `<div class="hero" style="margin-bottom:16px"><div class="kick">${m.year} · ${esc(m.country || "")}</div>
         <h1>${esc(m.name)}<small>${esc(m.circuit || "")}${m.location && m.location !== m.circuit ? " · " + esc(m.location) : ""}${m.circuit_type ? " · " + esc(m.circuit_type) : ""}</small></h1>
         <div class="when">${m.start ? fmtWhen(m.start) + " <span>weekend starts</span>" : ""}</div></div>
       <div class="grid"><div class="stack">
-        <div class="card"><h2>The track <span class="sub">corner numbers · white dot = start/finish</span></h2><div class="pad">${circuitSVG(c.map)}</div></div>
+        <div class="card"><h2>The track <span class="sub">corner numbers · chequered line = start/finish, arrow = direction</span></h2><div class="pad">${circuitSVG(c.map)}</div></div>
         <div class="card"><h2>Past races here <span class="sub">winner's tyres · SC / VSC · overtakes · track temp</span></h2><div class="scroll"><table>
           <thead><tr><th>Year</th><th>Podium</th><th class="r">Won from</th><th>Pole</th><th>Fastest lap</th><th>Winner's tyres</th><th class="r">SC/VSC</th><th class="r">Passes</th><th></th></tr></thead>
           <tbody>${eds.map(ed).join("") || `<tr><td colspan="9" class="muted">No races here in OpenF1's data yet (2023 on).</td></tr>`}</tbody></table></div>
@@ -448,7 +440,7 @@ async function xCircuitHistory(m, mk) {
     $("xchist").innerHTML = rows.length ? `<div class="pad xnote" style="padding-bottom:0">${SRC_BADGE("fastf1")} Earlier years</div><table><tbody>${rows.map(e => `<tr><td><b>${e.year}</b></td>
       <td>${(e.podium || []).map((p, i) => `<span class="drv" style="display:inline-flex;margin-right:8px"><span class="stripe" style="background:${esc(p.colour)}"></span>${i + 1}. ${esc(p.code)}</span>`).join("")}</td>
       <td class="r num muted">from P${e.winner_grid ?? "?"}</td><td>${e.pole ? "pole " + esc(e.pole.code) : ""}</td>
-      <td><button class="btn" style="padding:2px 8px;font-size:11px" onclick="replaySession(${+e.key})">▶ Replay</button></td></tr>`).join("")}</tbody></table>` : "";
+      <td><button class="btn" style="padding:2px 8px;font-size:11px" onclick="replaySession(${+e.key})">${ico("play")}Replay</button></td></tr>`).join("")}</tbody></table>` : "";
   } catch (e) { if ($("xchist")) $("xchist").innerHTML = ""; }
 }
 async function homeCircuit() {      // the Home page's compact preview of the next circuit
@@ -457,7 +449,7 @@ async function homeCircuit() {      // the Home page's compact preview of the ne
     safe("homecircuit", () => {
       const e = (c.editions || []).find(x => !x.error), loss = (c.map || {}).pit_loss || {};
       $("homecirch").textContent = c.meeting.circuit || "Circuit preview";
-      $("homecircuit").innerHTML = `<div class="pad">${circuitSVG(c.map, 380)}
+      $("homecircuit").innerHTML = `<div class="pad">${circuitSVG(c.map, 380, !$("homecircuit").querySelector("svg.trk"))}
         <div class="facts" style="margin-top:8px">${e ? `<div><b>${esc((e.podium[0] || {}).code || "-")}</b><span>won here in ${e.year}${e.winner_grid ? ` from ${e.winner_grid_from === "quali" ? "Q" : "P"}${e.winner_grid}` : ""}</span></div>` : ""}
         ${e && e.pole ? `<div><b>${e.pole.time ? fmtLap(e.pole.time) : esc(e.pole.code)}</b><span>pole ${e.year} (${esc(e.pole.code)})</span></div>` : ""}
         ${loss.normal ? `<div><b>${loss.normal.toFixed(1)}s</b><span>pit stop loss</span></div>` : ""}
@@ -475,11 +467,11 @@ async function xFF1() {
   safe("ff1", () => {
     const r = recs.recorder || {}, kb = n => n > 1e6 ? (n / 1e6).toFixed(1) + " MB" : Math.round(n / 1000) + " kB";
     $("xff1main").innerHTML = `
-      <div class="card"><h2>⏺ Record live timing <span class="sub">FastF1 · F1's own feed</span></h2><div class="pad">
+      <div class="card"><h2>Record live timing <span class="sub">FastF1 · F1's own feed</span></h2><div class="pad">
         ${r.running ? `<div style="font-size:16px;margin-bottom:8px"><span class="rec-dot"></span><b>Recording</b> ${esc([r.location, r.session].filter(Boolean).join(" - "))}
             <span class="muted num">· ${kb(r.bytes || 0)} · since ${fmtTime(new Date(r.started * 1000).toISOString())}${r.last_write ? ` · last data ${Math.round(Date.now() / 1000 - r.last_write)}s ago` : ""}</span></div>
             <button class="btn" onclick="xRecord('stop')">■ Stop recording</button>`
-          : `<button class="btn primary" onclick="xRecord('start')" ${f.available ? "" : "disabled"}>⏺ Start recording now</button>
+          : `<button class="btn primary" onclick="xRecord('start')" ${f.available ? "" : "disabled"}>${ico("rec")}Start recording now</button>
              ${r.file ? `<span class="xnote"> Last: ${esc(r.file)} (${kb(r.bytes || 0)})${r.exit != null ? ` · stopped (exit ${r.exit})` : ""}</span>` : ""}`}
         <p class="xnote">Saves everything F1's live-timing feed sends during a session (timing, positions, car telemetry, race control, weather) to
           <code>recordings/fastf1/</code>. FastF1 can't process it in real time; play it back afterwards, or mid-session to see what has been recorded so far.
@@ -490,11 +482,11 @@ async function xFF1() {
       </div></div>
       <div class="card"><h2>Recordings <span class="sub">newest first</span></h2>${(recs.recordings || []).length ? `<table><tbody>${recs.recordings.map(x => `<tr>
           <td>${x.recording ? '<span class="rec-dot"></span>' : ""}<b>${esc([x.location, x.session].filter(Boolean).join(" - ") || x.name)}</b><br><span class="xnote">${esc(x.name)} · ${kb(x.bytes)}${x.auth && x.auth !== "none" ? " · signed in" : " · free feed"}</span></td>
-          <td class="r">${x.key ? `<button class="btn" onclick="replaySession(${+x.key})">▶ Play back</button> <button class="btn" title="Analyse" onclick="xAnalyseKey(${+x.key})">📊</button>`
+          <td class="r">${x.key ? `<button class="btn" onclick="replaySession(${+x.key})">${ico("play")}Play back</button> <button class="btn" title="Analyse" aria-label="Analyse" onclick="xAnalyseKey(${+x.key})">${ico("chart")}</button>`
             : `<span class="xnote">couldn't match it to a session</span>`}</td></tr>`).join("")}</tbody></table>` : `<div class="empty">Nothing recorded yet.</div>`}</div>
       ${xLiveRecordings(live, kb)}`;
     $("xff1side").innerHTML = `<div class="card"><h2>FastF1 ${f.available ? SRC_BADGE("fastf1") : ""}</h2><div class="pad">
-        ${f.available ? `<p>✅ FastF1 ${esc(f.version || "")} is ready.${f.busy ? ` Working: ${esc(f.busy)}…` : ""}</p>` : `<p class="down">⚠ ${esc(f.error || "Not available")}</p>
+        ${f.available ? `<p>${ico("check")}FastF1 ${esc(f.version || "")} is ready.${f.busy ? ` Working: ${esc(f.busy)}…` : ""}</p>` : `<p class="down">${ico("alert")}${esc(f.error || "Not available")}</p>
           <pre class="log">python3 -m venv .venv
 .venv/bin/pip install fastf1</pre><p class="xnote">Then restart F1 Hub.</p>`}
         <p class="xnote">What FastF1 adds:</p>
@@ -518,7 +510,7 @@ function xLiveRecordings(live, kb) {
       <td><b>${esc([x.year, x.location, x.name].filter(Boolean).join(" "))}</b>${x.replaying ? ' <span class="xnote">· playing</span>' : ""}<br>
         <span class="xnote">${x.start ? esc(fmtWhen(x.start)) + " · " : ""}${kb(x.bytes)} · ${x.endpoints.length} feeds${x.layout === "day" ? " · older format" : ""}</span>
         <div id="lat-${+x.key}">${XP.lat[x.key] || ""}</div></td>
-      <td class="r"><button class="btn" onclick="replaySession(${+x.key})">▶ Play back</button>
+      <td class="r"><button class="btn" onclick="replaySession(${+x.key})">${ico("play")}Play back</button>
         <button class="btn" title="How late the live data was" onclick="xLatency(${+x.key})">Delays</button></td></tr>`).join("")}</tbody></table>`
       : `<div class="empty">Nothing yet. While F1 Hub follows a live session, the OpenF1 data it gets is saved here, to play back later.</div>`}
     <p class="xnote" style="padding:0 14px 12px">Saved in <code>${esc(live.folder || "recordings/openf1")}</code>. A playback shows the session

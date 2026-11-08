@@ -166,17 +166,17 @@ function renderLive(d) {
     const x = qx(r), v = x["q" + k];
     return `<td class="r ${Q.phase === k && !x.out_in ? "qseg" : "muted"}">${v != null ? fmtLap(v) : ""}</td>`;
   };
-  $("tower").innerHTML = !n ? `<tr><td colspan="16" class="muted" style="padding:28px 14px;text-align:center">${airState() === "upcoming"
+  flipRows($("tower"), () => $("tower").innerHTML = !n ? `<tr><td colspan="16" class="muted" style="padding:28px 14px;text-align:center">${airState() === "upcoming"
     ? `No timing yet - ${esc(d.session || "the session")} starts ${cdShort(new Date(d.session_start) - Date.now())}.` : "No timing data for this session yet."}</td></tr>`
     : d.rows.map((r, i) => {
-    const moved = lastPos[r.number] && lastPos[r.number] !== r.pos;
+    const moved = lastPos[r.number] && lastPos[r.number] !== r.pos, gain = moved && r.pos < lastPos[r.number];
     const gained = r.grid ? r.grid - r.pos : null;
     const comp = r.compound || "UNKNOWN";
     const x = qx(r);
     const cutRow = d.rows[i + 1], below = cutRow ? qx(cutRow) : {};
     const cutNote = !cuts[i + 1] || !cutRow ? "" : Q ? (below.needs != null ? ` · ${esc(cutRow.code)} is ${below.needs.toFixed(3)}s off safety` : "")
       : cutRow.best_lap && r.best_lap ? ` · P${i + 2} is ${(cutRow.best_lap - r.best_lap).toFixed(3)}s off safety` : "";
-    return `<tr class="click ${moved ? "flash" : ""} ${r.number === focus ? "focus" : ""} ${r.out ? "out" : ""} ${x.out_in ? "qout" : ""}" onclick="setFocus(${r.number})" title="${r.out ? esc("OUT - " + r.out.reason) : x.on_lap ? "On a flying lap" : ""}">
+    return `<tr data-n="${r.number}" class="click ${moved ? (gain ? "flash gain" : "flash lose") : ""} ${r.number === focus ? "focus" : ""} ${r.out ? "out" : ""} ${x.out_in ? "qout" : ""}" onclick="setFocus(${r.number})" title="${r.out ? esc("OUT - " + r.out.reason) : x.on_lap ? "On a flying lap" : ""}">
       <td class="pos">${r.out ? "OUT" : r.pos}${x.on_lap ? '<span class="onlap" title="On a flying lap">●</span>' : ""}</td>
       <td><div class="drv" title="${esc(r.team || "")}"><span class="stripe" style="background:${esc(r.colour)}"></span>${esc(r.code)} <span class="nm">${esc(r.name || "")}</span></div></td>
       <td class="r">${quali ? qgap(r) : r.out ? `<span style="color:#ff5050">OUT L${r.out.lap ?? "?"}</span>` : r.pos === 1 ? "Leader" : fmtGap(r.gap)}</td>
@@ -190,9 +190,9 @@ function renderLive(d) {
       <td class="r ${gained > 0 ? "up" : gained < 0 ? "down" : "muted"}">${gained == null ? "" : gained > 0 ? "▲" + gained : gained < 0 ? "▼" + -gained : "–"}</td>
       <td class="r" style="color:var(--gold)">${r.live_points ? "+" + r.live_points : ""}</td>`}
     </tr>${cuts[i + 1] ? `<tr class="cutline"><td colspan="14">${cuts[i + 1]}${cutNote}</td></tr>` : ""}`;
-  }).join("");
+  }).join(""));
   lastPos = Object.fromEntries(d.rows.map(r => [r.number, r.pos]));
-  $("minimap").innerHTML = trackSVG(d, 380, {});
+  paintTrack($("minimap"), d, 380, {});
 
   $("title").innerHTML = (d.title || []).map(t => `
     <div class="title pad"><div class="lbl">${esc(t.label)}</div>
@@ -236,10 +236,15 @@ function renderRC(d) {
 }
 
 function renderMap(d) {
-  $("bigmap").innerHTML = trackSVG(d, 1000, {labels: true, corners: true});
+  if (M3D.on) m3dKick();            // the 3D view draws itself every frame from D
+  else paintTrack($("bigmap"), d, 1000, {labels: true, corners: true});
   $("maphint").textContent = d.map.outline ? "" : "(circuit outline appears after the first clean lap is found)";
-  $("maporder").innerHTML = d.rows.filter(r => !r.out).map(r => `<div class="msg click" style="grid-template-columns:30px 1fr auto;cursor:pointer" onclick="setFocus(${r.number})">
-    <b>${r.pos}</b><span class="drv"><span class="stripe" style="background:${esc(r.colour)}"></span>${esc(r.code)} <span class="nm">${esc(r.name || "")}</span></span><span class="num muted">${r.pos === 1 ? "" : fmtGap(r.gap)}</span></div>`).join("");
+  $("maporder").innerHTML = d.rows.filter(r => !r.out).map(r => {
+    const comp = r.compound || "UNKNOWN";
+    return `<div class="mo${r.number === focus ? " on" : ""}" onclick="setFocus(${r.number}, true)" title="Show ${esc(r.code)} on the map">
+      <b class="p">${r.pos}</b><span class="stripe" style="background:${esc(r.colour)}"></span><b>${esc(r.code)}</b><span class="nm">${esc(r.name || "")}</span>
+      <span class="tyre sm t-${esc(comp)}">${comp === "UNKNOWN" ? "?" : esc(comp[0])}</span><span class="num g">${d.quali || r.gap == null ? (r.best_lap ? fmtLap(r.best_lap) : "") : r.pos === 1 ? "Leader" : fmtGap(r.gap)}</span></div>`;
+  }).join("");
 }
 
 function renderStrat(d) {
@@ -382,7 +387,7 @@ function renderRadio(d) {
       if (hits.length && RADIO.loaded && !RADIO.toasted.has(r.url) && d.now && r.date && new Date(d.now) - new Date(r.date) < 5 * 60000) {
         RADIO.toasted.add(r.url);
         const grp = [...new Set(hits.map(h => h.group))];
-        toast("radio", `📻 ${r.code}: ${grp.join(" · ")}`, "“" + (t.text.length > 110 ? t.text.slice(0, 107) + "…" : t.text) + "”",
+        toast("radio", `${r.code}: ${grp.join(" · ")}`, "“" + (t.text.length > 110 ? t.text.slice(0, 107) + "…" : t.text) + "”",
               RADIO_GROUPS[hits[0].group] || "#ffb000");
       }
     }
@@ -497,7 +502,7 @@ function renderSeason(s) {
     <td class="r"><b>${e.points}</b></td><td style="width:35%"><div class="ptsbar" style="width:${e.points / tl * 100}%;background:${esc(e.colour)}"></div></td>
     <td>${e.name === s.team_champion ? '<span style="color:var(--gold);font-weight:800">CHAMPIONS</span>' : e.alive ? '<span class="up">in contention</span>' : ""}</td></tr>`).join("");
   $("caltable").innerHTML = s.calendar.map(r => `<tr><td class="num muted">R${r.round}</td><td><b>${esc(r.name)}</b>${r.sprint ? ' <span style="color:var(--amber)">SPRINT</span>' : ""}</td>
-    <td class="muted num">${r.date}</td><td>${r.hidden && (r.done || new Date(r.date) <= new Date()) ? '<span class="hiddenres">hidden - spoiler mode</span>' : r.winner ? "🏆 " + esc(r.winner) : r.done ? "results pending" : '<span class="muted">upcoming</span>'}</td></tr>`).join("")
+    <td class="muted num">${r.date}</td><td>${r.hidden && (r.done || new Date(r.date) <= new Date()) ? '<span class="hiddenres">hidden - spoiler mode</span>' : r.winner ? ico("trophy") + esc(r.winner) : r.done ? "results pending" : '<span class="muted">upcoming</span>'}</td></tr>`).join("")
     + (s.cancelled.length ? `<tr><td></td><td colspan="3" class="muted">Cancelled: ${s.cancelled.map(esc).join(", ")}</td></tr>` : "");
 }
 

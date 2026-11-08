@@ -5,7 +5,8 @@
     --green: #39b54a; --yellow: #ffd300; --purple: #b138dd; --amber: #ffb000; --blue: #3d8bff;
   }
   * { box-sizing: border-box; }
-  html, body { overflow-x: hidden; }
+  /* clip, not hidden, on body: "hidden" makes body its own scroll box, and then nothing inside can be sticky */
+  html { overflow-x: hidden; } body { overflow-x: clip; }
   body { margin: 0; background: var(--bg); color: var(--text);
          font: 14px/1.4 "Titillium Web", system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
   .num { font-variant-numeric: tabular-nums; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
@@ -49,8 +50,12 @@
   td { padding: 6px 10px; border-top: 1px solid var(--line); white-space: nowrap; }
   tbody tr.click { cursor: pointer; } tbody tr.click:hover td { background: #20242f; }
   tr.focus td { background: #232a3d; }
-  tr.flash td { animation: flash 1.5s; }
-  @keyframes flash { from { background: #2b3550; } }
+  /* a car that changed place: a short tint (the clash with the celebration's own "flash" keyframes is avoided by the name) */
+  tr.flash td { animation: rowflash 1.6s ease-out; }
+  tr.flash.gain td { animation-name: rowgain; } tr.flash.lose td { animation-name: rowlose; }
+  @keyframes rowflash { from { background: #2b3550; } }
+  @keyframes rowgain { from { background: #1d4a2b; } }
+  @keyframes rowlose { from { background: #4a1d1d; } }
   .pos { font-weight: 800; width: 34px; text-align: center; }
   .drv { display: flex; align-items: center; gap: 8px; font-weight: 700; }
   .stripe { width: 4px; height: 18px; border-radius: 2px; flex: none; }
@@ -121,7 +126,6 @@
   .sec.yellow { background: #4d4210; color: #ffe98a; }
   .nm { color: var(--muted); font-weight: 400; font-size: 13px; }
   .clock { color: var(--muted); font-size: 13px; } .clock b { color: var(--text); }
-  .mapwrap svg { max-height: 74vh; }
   .ilist .row { display: grid; grid-template-columns: 26px 1fr auto; gap: 8px; padding: 6px 14px; border-top: 1px solid var(--line); align-items: center; }
   .ilist .row:first-child { border-top: 0; }
   .hbar { height: 6px; border-radius: 3px; background: var(--red); }
@@ -427,7 +431,8 @@
   .sched:first-child { border-top: 0; }
   .sched b { font-weight: 700; } .sched .t { color: var(--muted); font-size: 12px; } .sched .st { text-align: right; font-size: 12px; font-weight: 700; color: var(--muted); }
   .sched.done { opacity: .55; } .sched.done .st { color: var(--green); } .sched.nowon { background: #e1060018; } .sched.nowon .st { color: #ff6b6b; }
-  .sched.race b { color: var(--text); } .sched.race b::after { content: " 🏁"; }
+  .sched.race b { color: var(--text); } .sched.race b::after { content: ""; display: inline-block; width: 11px; height: 11px; margin-left: 7px; vertical-align: -1px; border-radius: 2px;
+                         background: repeating-conic-gradient(#fff 0 25%, #111 0 50%) 0 0 / 5.5px 5.5px; }
   .podium3 { display: grid; grid-template-columns: 1fr 1.15fr 1fr; gap: 10px; align-items: end; padding: 14px; }
   .pod { text-align: center; background: var(--panel2); border-radius: 8px; padding: 10px 6px; border-top: 4px solid var(--tc); min-width: 0; }
   .pod img, .pod .ph { width: 64px; height: 64px; border-radius: 50%; object-fit: cover; object-position: top; background: radial-gradient(circle at 50% 30%, var(--tc), #000 85%); display: block; margin: 0 auto 6px; }
@@ -598,3 +603,308 @@
   .toast { border-radius: 2px; }
   ::-webkit-scrollbar-thumb { background: #2f3442; border-radius: 0; }
   ::-webkit-scrollbar-thumb:hover { background: var(--red); }
+
+  /* ================================================================= feel
+     Motion, feedback and consistency layered on top: one easing curve, quick responses to every press,
+     content that settles in rather than popping, and calm (reduced) motion for anyone who asks for it. */
+  :root { --ease: cubic-bezier(.2, .8, .2, 1); --spring: cubic-bezier(.3, 1.4, .5, 1); --fast: .12s; --med: .22s; --slow: .36s; }
+  html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; text-rendering: optimizeLegibility; }
+  ::selection { background: #e1060066; color: #fff; }
+  a { color: #7db7ff; text-underline-offset: 2px; } a:hover { color: #b5d6ff; }
+
+  /* icons (sprite in dashboard.html): stroke icons that size with the text and take its colour */
+  .ico { width: 1.05em; height: 1.05em; flex: none; vertical-align: -.17em; margin-right: .42em; fill: none; stroke: currentColor;
+         stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; overflow: visible; }
+  .iconbtn .ico, .gear .ico { margin-right: 0; }
+  .iconbtn { padding-left: 9px; padding-right: 9px; line-height: 1; }
+  .gear { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; padding: 4px 9px; }
+  .gear:not(:has(.label)) { padding: 4px 8px; }
+  .gear .label { white-space: nowrap; }
+  .gear kbd { font-size: 10px; min-width: 0; padding: 0 5px; color: var(--muted); border-bottom-width: 1px; }
+  /* the command palette's button: the right end of the tab bar (stays put while the tabs scroll on a phone) */
+  nav .navcmd { margin-left: auto; position: sticky; right: 0; display: inline-flex; align-items: center; gap: 8px; text-transform: none;
+                letter-spacing: 0; font-size: 13px; font-weight: 600; padding: 0 4px 0 18px; color: var(--muted);
+                background: linear-gradient(90deg, transparent, #101217 18px); }
+  nav .navcmd > span { display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 4px; padding: 5px 8px 5px 10px;
+                       background: #ffffff06; transition: border-color var(--fast), color var(--fast), background-color var(--fast); }
+  nav .navcmd:hover > span { border-color: #3a3f4d; color: var(--text); background: #ffffff0c; }
+  nav .navcmd .ico { margin: 0; }
+  nav .navcmd kbd { font-size: 10px; min-width: 0; padding: 0 5px; border-bottom-width: 1px; color: var(--muted); }
+  @media (max-width: 1300px) { nav .navcmd .t { display: none; } }
+  @media (max-width: 700px) { nav .navcmd kbd { display: none; } }
+  .ico.spin { animation: spinico .9s linear infinite; }
+  @keyframes spinico { to { transform: rotate(360deg); } }
+  .spoilico .ico { width: 30px; height: 30px; margin: 0; color: var(--muted); }
+  .empty .ico { color: var(--muted); }
+  nav button .ico { opacity: .8; } nav button.on .ico { opacity: 1; color: var(--red); }
+  .replaybtns .btn > span:first-child { display: inline-flex; align-items: center; }
+  .replaybtns .btn .ico { color: var(--red); }
+  .brand { color: var(--text); text-decoration: none; } .brand:hover { color: var(--text); filter: brightness(1.15); }
+
+  /* every press answers: hover lifts the colour, a press sinks a pixel */
+  .btn, .gear, nav button, .subnav button, .filters button, .chiprow button, .artchip, .rulebtn, .modechip, .cmditem {
+    transition: background-color var(--fast) ease, border-color var(--fast) ease, color var(--fast) ease, transform .08s ease, box-shadow var(--med) ease, opacity var(--fast); }
+  .btn:active:not(:disabled), .gear:active, .subnav button:active, .filters button:active, .chiprow button:active,
+  .artchip:active, .rulebtn:active, .modechip:active { transform: translateY(1px); }
+  .btn.primary { box-shadow: 0 2px 10px #e1060033; } .btn.primary:hover { box-shadow: 0 4px 18px #e1060055; }
+  .subnav button:hover, .filters button:hover, .chiprow button:hover { color: var(--text); border-color: #3a3f4d; }
+  tbody td { transition: background-color var(--fast) ease; }
+  #dtable tr, .sched, .qlap, .inc, .msg { transition: background-color var(--fast) ease; }
+
+  /* the tab bar: stays at the top as you scroll (under the replay bar), with one marker that slides between tabs */
+  nav { position: sticky; top: var(--scrub-h, 0px); z-index: 19; background: #101217e8; transition: box-shadow var(--med) ease; }
+  @supports (backdrop-filter: blur(8px)) { nav { background: #101217cc; backdrop-filter: blur(12px) saturate(1.3); -webkit-backdrop-filter: blur(12px) saturate(1.3); } }
+  nav.stuck { box-shadow: 0 10px 24px -8px #000c; }
+  nav button.on::after { content: none; }
+  #navink { position: absolute; left: 0; bottom: 0; height: 3px; width: 0; background: var(--red); opacity: 0; pointer-events: none;
+            transition: transform var(--slow) var(--ease), width var(--slow) var(--ease); box-shadow: 0 0 12px #e1060088; }
+  nav button { transition: color var(--med) ease; }
+
+  /* a tab settles in when it opens; its top-level panels follow in quick succession */
+  main:not(.hidden) { animation: tabin var(--slow) var(--ease) both; }
+  main:not(.hidden) > :is(.grid, .two, .stack) > *, main:not(.hidden) > .card { animation: rise .42s var(--ease) both; }
+  main:not(.hidden) > :is(.grid, .two, .stack) > :nth-child(2) { animation-delay: .05s; }
+  main:not(.hidden) > :is(.grid, .two, .stack) > :nth-child(3) { animation-delay: .1s; }
+  main:not(.hidden) > :is(.grid, .two, .stack) > :nth-child(n+4) { animation-delay: .14s; }
+  @keyframes tabin { from { opacity: 0; } }
+  @keyframes rise { from { opacity: 0; transform: translateY(8px); } }
+  #tab-explore > section:not(.hidden) { animation: rise .3s var(--ease) both; }
+
+  /* dialogs: the page dims and blurs, the panel eases up into place */
+  #help, #statuspanel, #rulebox, #dcard, #cmdk { backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); }
+  #help:not(.hidden), #statuspanel:not(.hidden), #rulebox:not(.hidden), #dcard:not(.hidden), #cmdk:not(.hidden) { animation: fadein var(--med) ease both; }
+  #help:not(.hidden) .in, #statuspanel:not(.hidden) .in, #rulebox:not(.hidden) .in, #dcard:not(.hidden) .dcard-in, #cmdk:not(.hidden) .in {
+    animation: dialogin .28s var(--ease) both; box-shadow: 0 30px 80px -20px #000, 0 0 0 1px #ffffff08; }
+  @keyframes fadein { from { opacity: 0; } }
+  @keyframes dialogin { from { opacity: 0; transform: translateY(12px) scale(.98); } }
+  #rulebox .x:hover { color: var(--text); }
+
+  /* settings drawer: smoother slide, and the page behind dims (click it to close) */
+  #drawer { transition: transform .32s var(--ease), box-shadow .32s; box-shadow: none; }
+  #drawer.open { box-shadow: -20px 0 60px #000a; }
+  #drawer section { animation: none; }
+  #scrim { position: fixed; inset: 0; z-index: 49; background: #0008; opacity: 0; pointer-events: none; transition: opacity .32s var(--ease);
+           backdrop-filter: blur(2px); -webkit-backdrop-filter: blur(2px); }
+  #scrim.on { opacity: 1; pointer-events: auto; }
+
+  /* toasts: an icon, a calm slide in, and a bar counting down the time left (hover to keep it) */
+  .toast { position: relative; overflow: hidden; display: flex; gap: 10px; align-items: flex-start; padding: 11px 14px 13px 12px;
+           background: #181b22f2; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); animation: tin .42s var(--spring); }
+  .toast > .ico { color: var(--tc, var(--red)); margin: 2px 0 0; width: 18px; height: 18px; }
+  .toast .tb { min-width: 0; }
+  .toast .tbar { position: absolute; left: 0; bottom: 0; height: 2px; width: 100%; background: var(--tc, var(--red)); opacity: .7;
+                 transform-origin: left; animation: tcount 9s linear forwards; }
+  .toast:hover .tbar { animation-play-state: paused; }
+  .toast.out { animation: tout .35s var(--ease) forwards; }
+  @keyframes tin { from { transform: translateX(110%) scale(.96); opacity: 0; } }
+  @keyframes tout { to { transform: translateX(110%); opacity: 0; } }
+  @keyframes tcount { to { transform: scaleX(0); } }
+
+  /* form controls: toggle switches, one dropdown look in every browser, focus that's easy to see */
+  .switch { user-select: none; }
+  .switch input[type=checkbox], #alertkinds input[type=checkbox] {
+    -webkit-appearance: none; appearance: none; flex: none; width: 34px; height: 20px; margin: 0; border-radius: 10px; cursor: pointer;
+    border: 1px solid #3a3f4d; background: #262a35 radial-gradient(circle, #c9ccd4 0 6px, transparent 6.5px) no-repeat;
+    background-size: 18px 18px; background-position: 0 50%; vertical-align: middle;
+    transition: background-position var(--med) var(--spring), background-color var(--med) ease, border-color var(--med) ease; }
+  .switch input[type=checkbox]:checked, #alertkinds input[type=checkbox]:checked {
+    background-color: var(--red); border-color: var(--red); background-image: radial-gradient(circle, #fff 0 6px, transparent 6.5px);
+    background-position: 100% 50%; }
+  .switch input[type=checkbox]:hover:not(:checked) { border-color: #4a5063; }
+  select { -webkit-appearance: none; appearance: none; padding-right: 28px; cursor: pointer;
+           background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238b91a1' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+           background-repeat: no-repeat; background-position: right 9px center; }
+  select:hover, input[type=text]:hover, input[type=search]:hover, input[type=number]:hover, textarea:hover { border-color: #3a3f4d; }
+  select option { background: var(--panel); color: var(--text); }
+  .simgrid select { padding-right: 22px; background-position: right 5px center; }
+  input[type=text], input[type=search], input[type=number], textarea, select { transition: border-color var(--fast) ease, box-shadow var(--fast) ease; }
+  input[type=text]:focus, input[type=search]:focus, input[type=number]:focus, textarea:focus, select:focus {
+    outline: none; border-color: #e1060099; box-shadow: 0 0 0 3px #e1060026; }
+  :focus-visible { outline: 2px solid #6aa8ff; outline-offset: 2px; }
+  .switch input:focus-visible { outline-offset: 3px; }
+  input[type=range] { cursor: pointer; }
+  #drawer input[type=range] { -webkit-appearance: none; appearance: none; height: 22px; background: transparent; }
+  #drawer input[type=range]::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: #2a2e3a; }
+  #drawer input[type=range]::-moz-range-track { height: 4px; border-radius: 2px; background: #2a2e3a; }
+  #drawer input[type=range]::-moz-range-progress { height: 4px; border-radius: 2px; background: var(--red); }
+  #drawer input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; margin-top: -6px; border-radius: 50%;
+    background: #fff; border: 3px solid var(--red); box-shadow: 0 0 0 4px #e1060022; transition: transform var(--fast) var(--ease), box-shadow var(--fast); }
+  #drawer input[type=range]::-moz-range-thumb { width: 10px; height: 10px; border-radius: 50%; background: #fff; border: 3px solid var(--red);
+    box-shadow: 0 0 0 4px #e1060022; transition: transform var(--fast) var(--ease), box-shadow var(--fast); }
+  #drawer input[type=range]:hover::-webkit-slider-thumb, #drawer input[type=range]:active::-webkit-slider-thumb { transform: scale(1.15); box-shadow: 0 0 0 6px #e1060033; }
+  #drawer input[type=range]:hover::-moz-range-thumb, #drawer input[type=range]:active::-moz-range-thumb { transform: scale(1.15); box-shadow: 0 0 0 6px #e1060033; }
+
+  /* loading placeholders: soft shimmering lines where content is on its way */
+  .skel { display: grid; gap: 10px; }
+  .skel i { display: block; height: 12px; border-radius: 3px; width: 100%;
+            background: linear-gradient(90deg, #1f222b 0%, #2a2e3a 40%, #1f222b 80%) 0 0 / 300% 100%; animation: shimmer 1.4s ease-in-out infinite; }
+  .skel i:nth-child(2n) { width: 78%; } .skel i:nth-child(3n) { width: 62%; }
+  .skel i.tall { height: 160px; width: 100%; }
+  @keyframes shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
+
+  /* the timing tower: rows that change place slide (polish.js); the tint says which way */
+  #tower tr { will-change: auto; }
+  #tower tr.click:hover td { background: #1f2430; }
+
+  /* command palette (Ctrl+K) */
+  #cmdk { position: fixed; inset: 0; z-index: 90; background: #000a; display: flex; justify-content: center; align-items: flex-start; padding: 12vh 16px 16px; }
+  #cmdk.hidden { display: none; }
+  #cmdk .in { width: min(620px, 100%); background: var(--panel); border: 1px solid var(--line); border-top: 3px solid var(--red); border-radius: 10px;
+              overflow: hidden; display: flex; flex-direction: column; max-height: 70vh; }
+  .cmdq { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  .cmdq .ico { width: 18px; height: 18px; margin: 0; color: var(--muted); }
+  .cmdq input { flex: 1; min-width: 0; background: none; border: 0; color: var(--text); font: inherit; font-size: 16px; padding: 4px 0; }
+  .cmdq input:focus { box-shadow: none; outline: none; }
+  #cmdlist { overflow-y: auto; padding: 6px; overscroll-behavior: contain; }
+  .cmdgroup { padding: 10px 10px 4px; font-size: 11px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); }
+  .cmditem { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 6px; cursor: pointer; color: #c9ccd4; }
+  .cmditem .ico { margin: 0; color: var(--muted); }
+  .cmditem .stripe { height: 16px; }
+  .cmditem .cl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+  .cmditem .cl small { color: var(--muted); font-weight: 400; margin-left: 8px; }
+  .cmditem .cg { font-size: 11px; color: var(--muted); }
+  .cmditem kbd { font-size: 11px; min-width: 20px; color: var(--muted); }
+  .cmditem[aria-selected="true"] { background: #e106001c; color: var(--text); box-shadow: inset 2px 0 0 var(--red); }
+  .cmditem[aria-selected="true"] .ico { color: var(--red); }
+  .cmdnone { padding: 24px 12px; text-align: center; color: var(--muted); }
+  .cmdfoot { display: flex; gap: 16px; padding: 8px 16px; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); background: var(--panel2); }
+  .cmdfoot kbd { font-size: 10px; min-width: 18px; margin-right: 3px; }
+  @media (max-width: 700px) { #cmdk { padding-top: 8vh; } .cmdfoot { display: none; } }
+
+  /* ---------- the circuit map ---------- */
+  .trk { display: block; margin: auto; overflow: visible; }
+  .trk path { fill: none; stroke-linejoin: round; stroke-linecap: round; }
+  .trk .t-glow { stroke: #e10600; stroke-opacity: .05; }
+  .trk .t-edge { stroke: #3d4456; }
+  .trk .t-asph { stroke: #171a21; }
+  .trk .t-accent { stroke: #e10600; stroke-opacity: .9; }
+  .trk .t-hit { stroke: transparent; pointer-events: stroke; }
+  .trk .t-hit:hover { stroke: #ffffff12; }
+  .trk .t-flag path { transition: stroke .4s; }
+  .trk .t-dir path { stroke: #7a8296; stroke-width: 1.6; }
+  .trk .t-corner circle { fill: #101217; stroke: #2e3340; }
+  .trk .t-corner text { font: 700 9.5px "Titillium Web", system-ui, sans-serif; fill: #9aa0ae; }
+  .trk.big .t-corner text { font-size: 10px; }
+  .trk .car { stroke: #0b0c10; stroke-width: 1.8; cursor: pointer; transition: r var(--med) var(--spring); }
+  .trk.big .car { stroke-width: 2.2; }
+  .trk .car:hover { stroke: #fff; }
+  .trk .car.me { stroke: #fff; stroke-width: 2.5; }
+  .trk .car.push { stroke: #2bd46b; stroke-width: 3; }
+  .trk .car.ko { opacity: .35; }
+  .trk .t-lab { cursor: pointer; }
+  .trk .t-lab line { stroke-width: 1; stroke-opacity: .7; }
+  .trk .t-lab .bg { fill: #0b0c10; fill-opacity: .92; stroke: #ffffff14; transition: stroke var(--fast); }
+  .trk .t-lab:hover .bg, .trk .t-lab.me .bg { stroke: #ffffff66; }
+  .trk .t-lab text { font-family: "Titillium Web", system-ui, sans-serif; }
+  .trk .t-lab .p { font-size: 10.5px; font-weight: 600; fill: #8b91a1; }
+  .trk .t-lab .c { font-size: 11.5px; font-weight: 800; fill: #fff; letter-spacing: .3px; }
+  .trk .focusring circle { fill: none; stroke: #fff; stroke-width: 1.5; transform-box: fill-box; transform-origin: center;
+                           animation: ring 1.8s var(--ease) infinite; pointer-events: none; }
+  .trk .focusring { pointer-events: none; }
+  @keyframes ring { from { transform: scale(.55); opacity: .95; } to { transform: scale(1.9); opacity: 0; } }
+  .trk .t-inc text { font: 900 12px "Titillium Web", system-ui, sans-serif; }
+  .trk .t-inc .wave { fill: none; stroke: var(--ic); stroke-width: 2; transform-box: fill-box; transform-origin: center; animation: ring 1.4s ease-out infinite; }
+  .ghost text { font: 800 10px "Titillium Web", system-ui, sans-serif; fill: #e0a8ff; letter-spacing: 1px; }
+  .ghost .gh-halo { fill: none; stroke: #c56cff; stroke-width: 1.5; transform-box: fill-box; transform-origin: center; animation: ring 2.2s var(--ease) infinite; }
+  /* the circuit draws itself in */
+  .trk .draw { stroke-dasharray: 1; stroke-dashoffset: 0; }
+  .trk.intro .draw { animation: trkdraw 1.3s var(--ease) both; }
+  .trk.intro .t-asph { animation-delay: .06s; } .trk.intro .t-accent { animation-delay: .25s; animation-duration: 1.5s; }
+  .trk.intro .t-glow, .trk.intro .t-flag, .trk.intro .t-sf, .trk.intro .t-dir { animation: fadein .6s .9s both; }
+  .trk.intro .t-corner { animation: cornerin .4s var(--spring) both; animation-delay: 1s; }
+  .trk.intro .t-cars, .trk.intro .ghost { animation: fadein .5s 1.1s both; }
+  @keyframes trkdraw { from { stroke-dashoffset: 1; } }
+  @keyframes cornerin { from { opacity: 0; transform: scale(.4); } }
+  .trk .t-corner { transform-box: fill-box; transform-origin: center; }
+  .mapwrap svg { max-height: 74vh; }
+  #minimap { padding: 8px !important; }
+  .cprev svg.trk { max-height: 58vh; }
+  .mapwait { display: flex; align-items: center; justify-content: center; gap: 4px; min-height: 140px; color: var(--muted); font-size: 13px; }
+  .ghostinfo { font-size: 12px; color: var(--muted); padding: 8px 14px 0; } .ghostinfo:empty { display: none; }
+  .maplegend { display: flex; flex-wrap: wrap; gap: 6px 16px; padding: 10px 14px 12px; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); }
+  .maplegend span { display: inline-flex; align-items: center; gap: 6px; }
+  .maplegend i { width: 16px; height: 4px; border-radius: 2px; display: inline-block; }
+  .maplegend .lg-y { background: #ffd300; } .maplegend .lg-yy { background: repeating-linear-gradient(90deg, #ffd300 0 4px, transparent 4px 6px); }
+  .maplegend .lg-g { background: #39b54a; } .maplegend .lg-sc { background: #ffb000; }
+  .maplegend .lg-me, .maplegend .lg-push, .maplegend .lg-ghost { width: 11px; height: 11px; border-radius: 50%; background: #5a6070; }
+  .maplegend .lg-me { box-shadow: 0 0 0 2px #fff; } .maplegend .lg-push { box-shadow: 0 0 0 2px #2bd46b; }
+  .maplegend .lg-ghost { background: #c56cff66; box-shadow: 0 0 0 2px #e0a8ff; }
+  /* running order beside the map */
+  .mo { display: grid; grid-template-columns: 24px 5px 36px 1fr auto 64px; gap: 8px; align-items: center; padding: 6px 14px; border-top: 1px solid var(--line);
+        cursor: pointer; transition: background-color var(--fast); }
+  .mo:first-child { border-top: 0; }
+  .mo:hover { background: #ffffff06; }
+  .mo.on { background: linear-gradient(90deg, #e1060024, transparent 70%); box-shadow: inset 3px 0 0 var(--red); }
+  .mo .p { font-style: italic; font-weight: 900; text-align: right; }
+  .mo .stripe { height: 16px; }
+  .mo .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mo .g { text-align: right; color: var(--muted); font-size: 12px; }
+  .tyre.sm { width: 18px; height: 18px; font-size: 9px; border-width: 2px; margin: 0; }
+
+  /* ---------- timing tower: new times light up, places gained / lost tint the row ---------- */
+  tr.flash td { animation-delay: var(--hl-d, 0ms); }
+  #tower td.chg { animation: cellchg 1.4s var(--ease) both; }
+  #tower td.chg .sec { animation: secpop .45s var(--spring) both; animation-delay: inherit; }
+  @keyframes cellchg { from { background-color: #ffffff1f; color: #fff; } }
+  @keyframes secpop { from { transform: scale(1.25); filter: brightness(1.5); } }
+  #tower .sec { display: inline-block; }
+
+  /* ---------- header ---------- */
+  #lap { display: inline-block; }
+  #lapbar, .qbar i { transition: width .8s var(--ease); }
+  #flagsweep { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: linear-gradient(90deg, var(--fc, #fff), transparent);
+               transform-origin: left; transform: scaleX(0); pointer-events: none; box-shadow: 0 0 18px var(--fc, #fff); z-index: 2; }
+  .hero .cd b.tick { animation: tick .45s var(--ease); }
+  @keyframes tick { from { transform: translateY(-35%); opacity: .15; } }
+
+  /* ---------- settings drawer: its sections follow it in ---------- */
+  #drawer.open section { animation: drawerin .45s var(--ease) both; }
+  #drawer.open section:nth-child(2) { animation-delay: .04s; } #drawer.open section:nth-child(3) { animation-delay: .08s; }
+  #drawer.open section:nth-child(4) { animation-delay: .12s; } #drawer.open section:nth-child(n+5) { animation-delay: .16s; }
+  @keyframes drawerin { from { opacity: 0; transform: translateX(24px); } }
+  #help:not(.hidden) dl > * { animation: fadein .3s ease both; }
+  #help:not(.hidden) dl > :nth-child(n+7) { animation-delay: .05s; } #help:not(.hidden) dl > :nth-child(n+15) { animation-delay: .1s; }
+  #help:not(.hidden) dl > :nth-child(n+23) { animation-delay: .15s; }
+
+  /* ---------- cards you can click lift a little ---------- */
+  .replaybtns .btn { transition: transform var(--med) var(--ease), border-color var(--fast), background-color var(--fast), box-shadow var(--med); }
+  .replaybtns .btn:hover { transform: translateY(-2px); box-shadow: 0 8px 20px -8px #000c; border-color: #e1060066; }
+  .replaybtns .btn:active { transform: translateY(0); }
+  .card { transition: border-color var(--med) ease; }
+  .card:hover { border-color: #2f3442; }
+
+  /* ---------- tooltips ---------- */
+  #tip { position: fixed; z-index: 200; max-width: 300px; padding: 6px 9px; border-radius: 5px; background: #0b0c10f5; border: 1px solid #2f3442;
+         color: var(--text); font-size: 12px; font-weight: 600; line-height: 1.35; box-shadow: 0 10px 28px #000b; pointer-events: none;
+         opacity: 0; transition: opacity .14s ease, transform .16s var(--ease); white-space: pre-line; }
+  #tip.below { transform: translateY(-4px); } #tip.above { transform: translateY(4px); }
+  #tip.on { opacity: 1; transform: none; }
+  #tip kbd { margin-left: 8px; font-size: 10px; min-width: 18px; padding: 0 5px; border-bottom-width: 1px; }
+
+  /* ---------- segmented control (2D / 3D, orbit / follow) ---------- */
+  .seg { display: inline-flex; padding: 2px; border-radius: 5px; background: #0b0c10; border: 1px solid var(--line); gap: 2px; }
+  .seg button { background: none; border: 0; color: var(--muted); font: inherit; font-size: 12px; font-weight: 700; padding: 3px 10px; border-radius: 3px;
+                cursor: pointer; text-transform: none; letter-spacing: 0; font-style: normal; transition: background-color var(--fast), color var(--fast); }
+  .seg button:hover { color: var(--text); }
+  .seg button.on { background: var(--red); color: #fff; box-shadow: 0 2px 8px #e1060044; }
+  #tab-map .card h2 #mapview { margin-left: auto; }
+  #tab-map .card h2 .switch { margin-left: 14px; }
+
+  /* ---------- the 3D map ---------- */
+  #map3d { position: relative; }
+  #map3d:not(.hidden) { animation: fadein .4s ease both; }
+  #m3dc { display: block; width: 100%; height: min(72vh, 660px); cursor: grab; touch-action: none; }
+  .m3dbar { position: absolute; top: 12px; left: 12px; right: 12px; display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; pointer-events: none; }
+  .m3dbar > * { pointer-events: auto; }
+  .m3dbar .seg, .m3dbar .switch, .m3dex { background: #0b0c10d9; backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+  .m3dbar .switch, .m3dex { border: 1px solid var(--line); border-radius: 5px; padding: 3px 10px; font-size: 12px; font-weight: 700; min-height: 28px; }
+  .m3dex { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); } .m3dex b { color: var(--text); }
+  .m3dex input { width: 90px; accent-color: var(--red); }
+  #m3dreset { margin-left: auto; background: #0b0c10d9; }
+  .m3dhint { position: absolute; right: 14px; bottom: 14px; font-size: 11px; color: var(--muted); pointer-events: none; opacity: .8; }
+  @media (max-width: 700px) { .m3dhint { display: none; } #m3dc { height: 60vh; } }
+
+  /* calm motion: honour the system setting (the toast countdown keeps running, it's a timer, not decoration) */
+  @media (prefers-reduced-motion: reduce) {
+    *:not(.tbar), *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+  }

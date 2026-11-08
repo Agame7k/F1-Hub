@@ -59,6 +59,12 @@ function animateMaps(fromTimer) {
         const lab = svg.querySelector(`g[data-n="${el.dataset.n}"]`);
         if (lab) lab.setAttribute("transform", `translate(${(x - lab.dataset.x).toFixed(1)},${(y - lab.dataset.y).toFixed(1)})`);
       });
+      // the pulsing ring follows the selected car
+      const ring = svg.querySelector(".focusring"), me = focus && svg.querySelector(`circle[data-n="${focus}"]`);
+      if (ring) {
+        ring.style.display = me ? "" : "none";
+        if (me) ring.setAttribute("transform", `translate(${me.getAttribute("cx")},${me.getAttribute("cy")})`);
+      }
     });
   } catch (e) { console.warn("map animation", e); }
 }
@@ -72,14 +78,14 @@ function renderSync() {
   const since = (Date.now() - receivedAt) / 1000;
   if (D.loading) {
     bar.className = "load";
-    bar.innerHTML = `<span>⏳ ${esc(D.loading.text)}…</span><span class="big">${Math.round(D.loading.elapsed + since)} s</span><span class="muted">a full race takes ~20-40 s the first time, then it's cached</span>`;
+    bar.innerHTML = `<span>${ico("loader", "spin")}${esc(D.loading.text)}…</span><span class="big">${Math.round(D.loading.elapsed + since)} s</span><span class="muted">a full race takes ~20-40 s the first time, then it's cached</span>`;
     return;
   }
   const ds = D.delay_status;
   if (ds && ds.buffering && D.settings && D.settings.delay) {
     const left = Math.max(0, ds.ready_in - since), pct = Math.min(100, (D.settings.delay - left) / D.settings.delay * 100);
     bar.className = "";
-    bar.innerHTML = `<span>⏸ Building your ${D.settings.delay}s delay - holding the picture so nothing is spoiled</span>
+    bar.innerHTML = `<span>${ico("pause")}Building your ${D.settings.delay}s delay - holding the picture so nothing is spoiled</span>
       <span class="big">${Math.ceil(left)} s</span><span class="bar"><i style="width:${pct.toFixed(1)}%"></i></span><span class="muted">until the delayed view starts moving</span>`;
     return;
   }

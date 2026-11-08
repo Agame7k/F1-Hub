@@ -35,6 +35,30 @@ FLAG_COLOURS = {"GREEN": "39B54A", "YELLOW": "FFD300", "DOUBLE YELLOW": "FFD300"
                 "SC": "FFB000", "VSC": "FFB000", "CHEQUERED": "FFFFFF"}
 
 
+def elevation_profile(outline, trace, max_gap=400):
+    """Height of each outline point in metres above the lowest point of the lap.
+
+    trace is one lap of location samples, [x, y, z] in OpenF1's units (tenths of a metre), in the same frame as the
+    outline. Each outline point takes the height of the nearest sample; samples without a height (z = 0) are skipped.
+    None if there's too little to go on, or the outline and the lap don't line up (a different layout)."""
+    pts = [p for p in trace if len(p) > 2 and p[2]]
+    if len(pts) < 50 or len(outline) < 10:
+        return None
+    pts = pts[::max(1, len(pts) // 600)]
+    heights, far = [], 0
+    for p in outline:
+        x, y = p[0], p[1]
+        d, z = min(((q[0] - x) ** 2 + (q[1] - y) ** 2, q[2]) for q in pts)
+        far += d > max_gap ** 2
+        heights.append(z)
+    if far > len(outline) * 0.2:
+        return None
+    n, w = len(heights), 3              # location heights are noisy: a small moving average around the loop
+    smooth = [sum(heights[(i + k) % n] for k in range(-w, w + 1)) / (2 * w + 1) for i in range(n)]
+    low = min(smooth)
+    return [round((z - low) / 10, 1) for z in smooth]
+
+
 class LiveTracker:
     def __init__(self, session_key="latest"):
         sessions = self._fetch("sessions", session_key=session_key)
@@ -80,6 +104,8 @@ class LiveTracker:
         self.loc = {}              # number -> (x, y, date)
         self.trail = {}            # number -> deque of [epoch_ms, x, y]: recent samples so the map can animate smoothly
         self.outline = None        # [[x, y], ...] one lap of the circuit
+        self.elev_trace = None     # [[x, y, z], ...] the same lap with heights, for the 3D map
+        self._elev = (None, None)  # (outline key, heights) - worked out once per outline
         self.gap_hist = {}         # number -> [[epoch, gap_to_leader], ...]
         self.weather_hist = []
         self.retired = {}          # number -> {"lap", "reason"}
@@ -507,6 +533,15 @@ class LiveTracker:
         return self.incidents.snapshot(self.now().timestamp(), info, self._incident_place,
                                        lambda e, where: confirmations_from(self.messages, e["number"], e["t"], where.get("sector")))
 
+    def _elevation(self, outline):
+        """Heights for the outline the map is drawn from (cached: the outline rarely changes)."""
+        if not outline or not self.elev_trace:
+            return None
+        key = (len(outline), tuple(outline[0]), len(self.elev_trace))
+        if self._elev[0] != key:
+            self._elev = (key, elevation_profile(outline, self.elev_trace))
+        return self._elev[1]
+
     def _build_outline(self):
         """Trace the circuit from one clean lap of location data."""
         best = None
@@ -520,9 +555,11 @@ class LiveTracker:
         start = datetime.fromisoformat(l["start"])
         rows = self._fetch("location", session_key=self.key, driver_number=n,
                     **{"date>=": self._iso(start), "date<": self._iso(start + timedelta(seconds=l["t"]))})
-        pts = [[r["x"], r["y"]] for r in sorted(rows, key=lambda r: r["date"]) if r["x"] or r["y"]]
+        rows = [r for r in sorted(rows, key=lambda r: r["date"]) if r["x"] or r["y"]]
+        pts = [[r["x"], r["y"]] for r in rows]
         if len(pts) > 50:
             self.outline = pts
+            self.elev_trace = [[r["x"], r["y"], r.get("z") or 0] for r in rows]
 
     def _refresh_telemetry(self):
         since = self.tel[-1]["date"] if self.tel and self.tel[-1]["n"] == self.focus else \
@@ -923,6 +960,7 @@ class LiveTracker:
             "incidents": self.incident_list(),
             "rc": self.rc.snapshot(self.code),
             "map": {"outline": (self.circuit or {}).get("outline") or outline, "cars": cars,
+                    "elevation": self._elevation((self.circuit or {}).get("outline") or outline),
                     "rotation": (self.circuit or {}).get("rotation", 0),
                     "sectors": (self.circuit or {}).get("sectors", []),
                     "corners": (self.circuit or {}).get("corners", [])},

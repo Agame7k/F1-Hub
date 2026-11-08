@@ -29,15 +29,20 @@ function beep(colour) {
     o.connect(g).connect(audioCtx.destination); o.start(t); o.stop(t + 0.4);
   } catch (e) {}
 }
+const TOAST_ICON = {flags: "flag", finish: "flag", radio: "mic", crash: "alert", lead: "trend", fastest: "clock", penalty: "doc",
+  out: "x", weather: "rain", pits: "activity"};
 function toast(kind, title, sub, colour) {
   if (AL.kinds[kind] === false) return;
   const el = document.createElement("div");
   el.className = "toast"; el.style.setProperty("--tc", colour || "#e10600");
-  el.innerHTML = `${esc(title)}${sub ? `<small>${esc(sub)}</small>` : ""}`;
-  el.onclick = () => el.remove();
+  el.setAttribute("role", "status");
+  el.innerHTML = `${ico(TOAST_ICON[kind] || "bell")}<div class="tb">${esc(title)}${sub ? `<small>${esc(sub)}</small>` : ""}</div><i class="tbar"></i>`;
+  const dismiss = () => { if (el.classList.contains("out")) return; el.classList.add("out"); setTimeout(() => el.remove(), 350); };
+  el.onclick = dismiss;
+  // the bar along the bottom counts down the 9 s; hovering pauses it (and so the toast stays)
+  el.querySelector(".tbar").addEventListener("animationend", dismiss);
   $("toasts").appendChild(el);
   while ($("toasts").children.length > 5) $("toasts").firstChild.remove();
-  setTimeout(() => { el.classList.add("out"); setTimeout(() => el.remove(), 450); }, 9000);
   if (AL.sound) beep(colour);
   if (AL.notify && document.hidden && "Notification" in window && Notification.permission === "granted") {
     try { new Notification("F1 Hub - " + title, {body: sub || "", tag: kind + title, silent: !AL.sound}); } catch (e) {}
@@ -92,7 +97,7 @@ function checkAlerts(d) {
   const pinc = new Map((p.incidents || []).map(i => [i.id, i]));
   (d.incidents || []).forEach(i => {
     const was = pinc.get(i.id);
-    if (!was && i.state === "stopped") toast("crash", `${i.kind === "crash" ? "⚠ Crash" : "Stopped on track"}: ${i.code}`, incWhere(i) + (i.speed_before && i.kind === "crash" ? ` · from ${i.speed_before} km/h` : ""), "#ff2a2a");
+    if (!was && i.state === "stopped") toast("crash", `${i.kind === "crash" ? "Crash" : "Stopped on track"}: ${i.code}`, incWhere(i) + (i.speed_before && i.kind === "crash" ? ` · from ${i.speed_before} km/h` : ""), "#ff2a2a");
     if (was && was.state === "stopped" && i.state === "rejoined") toast("crash", `${i.code} spun and rejoined`, incWhere(i), "#ffd300");
   });
   if (d.weather && p.weather && d.weather.rain && !p.weather.rain) toast("weather", "Rain reported at the track", `track ${d.weather.track}°C`, "#0067ff");
@@ -120,11 +125,11 @@ function renderCrash(d) {
   CRASH.shown = key;
   el.classList.remove("hidden");
   el.innerHTML = `<div class="crash ${kind}" role="alert"><div class="stripes"></div><div class="body">
-      <div class="what">⚠ ${INC_WORD[kind]}</div>
+      <div class="what">${ico("alert")}${INC_WORD[kind]}</div>
       <div class="who"><i style="background:${esc(i.colour)}"></i><div>${esc(i.code)}<small>${esc(i.name || "")}${i.team ? " · " + esc(i.team) : ""}</small></div></div>
       <div class="where">${esc(incWhere(i))}${i.speed_before && kind === "crash" ? ` · from ${i.speed_before} km/h` : ""}
         <small>${kind === "spin" ? "Spun and drove off again" : (i.confirmed_by || []).length ? esc(i.confirmed_by.join(" · ")) : "Detected from car position - race control hasn't said anything yet"}</small></div>
-      <button class="x" onclick="CRASH.dismissed.add(${i.id});renderCrash(D)" title="Dismiss">✕</button>
+      <button class="x" onclick="CRASH.dismissed.add(${i.id});renderCrash(D)" title="Dismiss" aria-label="Dismiss">${ico("x")}</button>
     </div>${live.length > 1 ? `<div class="more">Also: ${live.slice(1).map(x => `${esc(x.code)} (${INC_WORD[x.kind].toLowerCase()})`).join(", ")}</div>` : ""}</div>`;
   if (i.number) el.querySelector(".who").onclick = () => setFocus(i.number);
 }

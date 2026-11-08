@@ -44,7 +44,7 @@ function renderHome() {
         <div class="when">${fmtWhen(x.start)} <span>your time</span></div>
         <div class="cd" data-cdto="${esc(x.start)}"></div>
         <div class="row2">${race && race.key !== x.key ? `<span class="muted">Race ${fmtWhen(race.start)} · <b data-cdshort="${esc(race.start)}"></b></span>` : ""}
-        <button class="btn" onclick="downloadIcs()">📅 Add the weekend to your calendar</button></div>
+        <button class="btn" onclick="downloadIcs()">${ico("calendar")}Add the weekend to your calendar</button></div>
         ${x.round ? `<div class="num-bg">${x.round}</div>` : ""}`;
     } else {
       hero.className = "hero off";
@@ -65,7 +65,7 @@ function renderHome() {
     }).join("") : `<div class="empty">No sessions scheduled.</div>`;
     // replays
     $("homerecent").innerHTML = (h.recent || []).length ? h.recent.map(x =>
-      `<button class="btn" onclick="replaySession(${+x.key})">▶ ${esc(x.name)}<small>${esc(x.meeting)} · ${fmtDay(x.start)}</small></button>`).join("")
+      `<button class="btn" onclick="replaySession(${+x.key})"><span>${ico("play")}${esc(x.name)}</span><small>${esc(x.meeting)} · ${fmtDay(x.start)}</small></button>`).join("")
       : `<span class="muted">Nothing to replay yet this season.</span>`;
     homeSeason();
     tickHome();
@@ -75,7 +75,7 @@ function renderHome() {
 function resultCard(r) {
   const key = "revealed." + r.key;
   const title = `${esc(r.meeting)} - ${esc(r.name)}${r.round ? ` <span class="sub">Round ${r.round} · ${fmtDay(r.start)}</span>` : ""}`;
-  if (r.hidden || !r.results) return `<div class="card"><h2>${title}</h2><div class="empty">🙈 Result hidden - you're watching this one delayed or as a replay (spoiler mode).</div></div>`;
+  if (r.hidden || !r.results) return `<div class="card"><h2>${title}</h2><div class="empty">${ico("eyeoff")}Result hidden - you're watching this one delayed or as a replay (spoiler mode).</div></div>`;
   const covered = (D && D.settings ? D.settings.spoiler : true) && !store.get(key, false);   // unsure yet? keep it covered
   const res = r.results, quali = r.type === "Qualifying";
   const pod = [res[1], res[0], res[2]].filter(Boolean).map(x => `<div class="pod p${x.pos}" style="--tc:${esc(x.colour)}">
@@ -86,7 +86,7 @@ function resultCard(r) {
       <td class="r num">${x.status ? `<span class="down">${x.status}</span>` : quali ? fmtLap(x.time) : fmtGap(x.gap)}</td>
       <td class="r num muted">${x.points ? "+" + x.points : ""}</td></tr>`).join("");
   return `<div class="card"><h2>${title}</h2><div class="spoilwrap ${covered ? "covered" : ""}">
-    <div class="spoilcover"><div style="font-size:28px">🙈</div><b>Result hidden (spoiler mode)</b><span class="muted">Haven't watched it yet? Replay it below first.</span>
+    <div class="spoilcover"><div class="spoilico">${ico("eyeoff")}</div><b>Result hidden (spoiler mode)</b><span class="muted">Haven't watched it yet? Replay it below first.</span>
       <button class="btn primary" onclick="revealResult('${esc(key)}')">Show the result</button></div>
     <div class="podium3">${pod}</div>
     <div class="scroll"><table class="num"><tbody>${rows}</tbody></table></div></div></div>`;
@@ -98,7 +98,7 @@ function homeSeason() {
   // the standings include the latest race, so they stay covered for as long as that result is
   const lr = H && H.last_race, key = lr && "revealed." + lr.key;
   const covered = lr && !lr.hidden && (D && D.settings ? D.settings.spoiler : true) && !store.get(key, false);
-  $("homechamp").innerHTML = `<div class="spoilwrap ${covered ? "covered" : ""}"><div class="spoilcover"><b>🙈 Includes the ${esc(lr ? lr.meeting : "")} result</b>
+  $("homechamp").innerHTML = `<div class="spoilwrap ${covered ? "covered" : ""}"><div class="spoilcover"><b>${ico("eyeoff")}Includes the ${esc(lr ? lr.meeting : "")} result</b>
       <button class="btn primary" onclick="revealResult('${esc(key || "")}')">Show standings</button></div><div>` + (S.driver_champion ? `<div class="crown"><small>World Champion</small><div>${esc(S.driver_champion)}</div></div>` : "") +
     top.map((e, i) => `<div class="champrow"><b>${i + 1}</b><div class="drv"><span class="stripe" style="background:${esc(e.colour)}"></span>${esc(e.name)}</div>
       <b class="num">${e.points}</b><span class="gp num">${i ? "-" + (lead - e.points) : ""}</span></div>`).join("") +
@@ -133,15 +133,23 @@ function tickHome() {     // once a second: the countdowns, and the "session has
   const now = Date.now();
   document.querySelectorAll("[data-cdto]").forEach(el => {
     const p = cdParts(new Date(el.dataset.cdto) - now);
-    el.innerHTML = ["days", "hrs", "min", "sec"].map((u, i) => `<div><b>${String(p[i]).padStart(2, "0")}</b><span>${u.toUpperCase()}</span></div>`).join("");
+    // update the digits in place so a changing one can roll over (rebuilding would restart every animation)
+    if (el.children.length !== 4) el.innerHTML = ["days", "hrs", "min", "sec"].map(u => `<div><b></b><span>${u.toUpperCase()}</span></div>`).join("");
+    [...el.children].forEach((box, i) => {
+      const b = box.firstElementChild, v = String(p[i]).padStart(2, "0");
+      if (b.textContent === v) return;
+      const first = !b.textContent;
+      b.textContent = v;
+      if (!first) { b.classList.remove("tick"); void b.offsetWidth; b.classList.add("tick"); }
+    });
   });
   document.querySelectorAll("[data-cdshort]").forEach(el => el.textContent = cdShort(new Date(el.dataset.cdshort) - now));
   const bar = $("endedbar");
   const air = airState(), ended = air === "ended";
   bar.classList.toggle("hidden", air === "on");
-  if (air === "upcoming") bar.innerHTML = `⏱ <span><b>${esc(D.session || "This session")} hasn't started yet</b> - it starts <b>${cdShort(new Date(D.session_start) - now)}</b> (${fmtWhen(D.session_start)}). Timing appears here as soon as it does.</span>
+  if (air === "upcoming") bar.innerHTML = `${ico("clock")}<span><b>${esc(D.session || "This session")} hasn't started yet</b> - it starts <b>${cdShort(new Date(D.session_start) - now)}</b> (${fmtWhen(D.session_start)}). Timing appears here as soon as it does.</span>
     <button class="btn" onclick="openTab('home')">Home</button>`;
-  if (ended) bar.innerHTML = `🏁 <span><b>This session has finished.</b> ${H.next ? `Next: ${esc(H.next.name)} · ${esc(H.next.meeting)} <b>${cdShort(new Date(H.next.start) - now)}</b>` : ""}</span>
+  if (ended) bar.innerHTML = `${ico("flag")}<span><b>This session has finished.</b> ${H.next ? `Next: ${esc(H.next.name)} · ${esc(H.next.meeting)} <b>${cdShort(new Date(H.next.start) - now)}</b>` : ""}</span>
     <button class="btn" onclick="openTab('home')">Home</button><button class="btn" onclick="replaySession(${+D.session_key})">Replay it</button>`;
   offAirHeader();
 }

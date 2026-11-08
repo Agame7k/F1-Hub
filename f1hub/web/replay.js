@@ -137,7 +137,8 @@ function renderMode(d) {
   if (d.mode === "replay" && d.replay) {
     const r = d.replay, a = new Date(r.start).getTime() - 120000, b = new Date(r.end).getTime() + 600000;
     const rs = replayState();
-    $("playbtn").textContent = rs.playing ? "❚❚" : "▶";
+    const pb = $("playbtn"), pw = rs.playing ? "pause" : "play";
+    if (pb.dataset.ico !== pw) { pb.dataset.ico = pw; pb.innerHTML = ico(pw); }
     $("speedsel").value = String(rs.speed);
     $("replayname").textContent = r.name;
     if (!scrubbing) $("scrub").value = Math.round((vnow() - a) / (b - a) * 1000);
@@ -174,7 +175,7 @@ function renderTimeline(r, a, b) {
   }).join("");
   $("chapters").innerHTML = chapters.length > 1 ? chapters.map(e =>
     `<button class="btn" data-t="${esc(e.t)}" onclick="jumpTo(${tl.events.indexOf(e)})" title="Jump to the start of ${esc(e.label)}">${esc(e.label)}</button>`).join("")
-    + `<button class="btn" onclick="jumpEvent(-1)" title="Previous flag or chapter (,)">⏮</button><button class="btn" onclick="jumpEvent(1)" title="Next flag or chapter (.)">⏭</button>` : "";
+    + `<button class="btn iconbtn" onclick="jumpEvent(-1)" title="Previous flag or chapter (,)" aria-label="Previous flag or chapter">${ico("prev")}</button><button class="btn iconbtn" onclick="jumpEvent(1)" title="Next flag or chapter (.)" aria-label="Next flag or chapter">${ico("next")}</button>` : "";
 }
 function jumpTo(i) {      // a little before the moment, to see it happen (90 s before a chequered flag: the last laps)
   const e = TL.events[i];

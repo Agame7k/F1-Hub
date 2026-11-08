@@ -2,6 +2,8 @@
    A classic script: it shares the page's global scope with the others, loaded in the order dashboard.html
    lists them (functions in a later file aren't defined yet while an earlier one runs). */
 const $ = id => document.getElementById(id);
+// an icon from the sprite at the top of dashboard.html (scales with the text, takes its colour)
+const ico = (name, cls = "") => `<svg class="ico ${cls}" aria-hidden="true"><use href="#i-${name}"/></svg>`;
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const fmtLap = t => { if (t == null) return "-"; const m = Math.floor(t / 60), s = (t - m * 60).toFixed(3).padStart(6, "0"); return m ? `${m}:${s}` : (+s).toFixed(3); };
 const fmtGap = v => v == null ? "" : (typeof v === "number" ? "+" + v.toFixed(3) : esc(v));
@@ -42,8 +44,10 @@ document.querySelectorAll("#rcfilters button").forEach(b => b.onclick = () => {
 });
 $("drvsel").onchange = e => setFocus(e.target.value ? +e.target.value : null);
 
-async function setFocus(n) {
+// stay: pick the driver without leaving the tab (the track map, where it lights up the car and drives the ghost)
+async function setFocus(n, stay) {
+  if (stay && n === focus) n = null;          // clicking the selected car again lets it go
   focus = n;
   try { const r = await fetch("/api/focus?driver=" + (n || ""), {cache: "no-store"}); render(await r.json()); } catch (e) {}
-  if (n) openTab("drv");
+  if (n && !stay) openTab("drv");
 }

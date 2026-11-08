@@ -7,7 +7,7 @@ function msgRow(m) {
   const rule = RULE_KINDS.has(m.kind) && (m.cars || []).length && !/TRACK LIMITS/i.test(m.text || "") || ["penalty", "reprimand"].includes(m.kind);
   return `<div class="msg k-${esc(m.kind)}"><span class="when num">${m.lap ? "L" + m.lap : ""} ${esc(m.time)}</span>
     <span><span class="tag">${esc(KIND_LABEL[m.kind] || m.kind)}</span>${esc(m.text)}${rule
-      ? `<button class="rulebtn" title="The rule and the stewards' official decision" data-cars="${esc((m.cars || []).join(","))}" data-text="${esc(m.text)}" onclick="openRule(this)">📄 Rule</button>` : ""}</span></div>`;
+      ? `<button class="rulebtn" title="The rule and the stewards' official decision" data-cars="${esc((m.cars || []).join(","))}" data-text="${esc(m.text)}" onclick="openRule(this)">${ico("doc")}Rule</button>` : ""}</span></div>`;
 }
 
 /* ---------- the rule behind a stewards' message, from fia.com (f1hub/fia.py) ---------- */
@@ -22,7 +22,7 @@ const ext = (url, label) => `<a href="${esc(url)}" target="_blank" rel="noopener
 async function openRule(btn) {
   const gen = ++RULE.gen, cars = btn.dataset.cars || "", text = btn.dataset.text || "";
   $("rulebox").classList.remove("hidden");
-  const head = `<button class="x" onclick="closeRule()" title="Close (Esc)">×</button><h3>📄 The rule & the stewards' decision</h3><div class="msgtxt">${esc(text)}</div>`;
+  const head = `<button class="x" onclick="closeRule()" title="Close (Esc)">×</button><h3>${ico("doc")}The rule & the stewards' decision</h3><div class="msgtxt">${esc(text)}</div>`;
   $("rulein").innerHTML = head + `<div class="muted">Looking up the official documents on fia.com…</div>`;
   let r;
   try { r = await (await fetch(`/api/fia/stewarding?car=${encodeURIComponent(cars)}&text=${encodeURIComponent(text)}${fiaBefore()}`, {cache: "no-store"})).json(); }
@@ -173,86 +173,133 @@ function since(iso) {
   const s = Math.max(0, Math.round((vnow() - new Date(iso)) / 1000));
   return `${Math.floor(s / 60)} min ${String(s % 60).padStart(2, "0")} s`;
 }
-function trackSVG(d, W, opts = {}) {
-  const m = d.map, cars = m.cars || [], outline = m.outline || [];
-  if (!outline.length && !cars.length) return `<div class="muted pad">Waiting for location data…</div>`;
+/* ---------- the circuit map ----------
+   Two layers: the circuit itself (asphalt, flags, corners, start line, stopped cars), rebuilt only when one of those
+   changes, and the cars, refreshed with every update. Cars are placed where map.js is drawing them right now (a few
+   seconds behind the newest sample), so an update never makes them jump. */
+function trackLayers(d, W, opts = {}) {
+  const m = d.map || {}, cars = m.cars || [], outline = m.outline || [];
+  if (!outline.length && !cars.length) return null;
+  const big = !!opts.labels;
   const th = (m.rotation || 0) * Math.PI / 180, cs = Math.cos(th), sn = Math.sin(th);
   const rot = (x, y) => [x * cs - y * sn, x * sn + y * cs];
   const base = (outline.length ? outline : cars.map(c => [c.x, c.y])).map(p => rot(p[0], p[1]));
   const xs = base.map(p => p[0]), ys = base.map(p => p[1]);
   const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
-  const pad = opts.labels ? 60 : 18;
+  const pad = big ? 60 : 18;
   const k = (W - 2 * pad) / (maxX - minX || 1);
   const H = Math.round((maxY - minY) * k + 2 * pad);
   const P = (x, y) => { const [a, b] = rot(x, y); return [pad + (a - minX) * k, H - (pad + (b - minY) * k)]; };
   const pts = outline.map(p => P(p[0], p[1]));
-  const line = arr => arr.map((p, i) => (i ? "L" : "M") + p[0].toFixed(1) + "," + p[1].toFixed(1)).join("");
-  const sw = opts.labels ? 16 : 11, rc = d.rc || {}, flags = rc.sector_flags || {}, cleared = rc.sector_cleared || {};
-  let track = pts.length ? `<path d="${line(pts)}Z" fill="none" stroke="#2c303b" stroke-width="${sw}" stroke-linejoin="round"/>` : "";
-  // marshal sectors coloured by flag state
-  const secs = (m.sectors || []).slice().sort((a, b) => a.start - b.start);
-  if (pts.length && secs.length) {
-    secs.forEach((sec, i) => {
-      const end = i + 1 < secs.length ? secs[i + 1].start : secs[0].start + pts.length;
+  const f1 = v => v.toFixed(1);
+  const line = arr => arr.map((p, i) => (i ? "L" : "M") + f1(p[0]) + "," + f1(p[1])).join("");
+  const sw = big ? 15 : 9, rc = d.rc || {}, flags = rc.sector_flags || {}, cleared = rc.sector_cleared || {};
+  const neutral = d.status === "RED" ? "#e10600" : d.status === "SC" || d.status === "VSC" ? "#ffb000" : "";
+
+  // marshal sectors: only a sector with something to say gets colour
+  const secs = (m.sectors || []).slice().sort((a, b) => a.start - b.start).map((sec, i, all) => {
+    const f = flags[String(sec.number)];
+    const recent = cleared[String(sec.number)] && (vnow() - new Date(cleared[String(sec.number)])) < 60000;
+    let col = neutral, cls = "";
+    if (f === "YELLOW") col = "#ffd300";
+    else if (f === "DOUBLE YELLOW") { col = "#ffd300"; cls = "dbl"; }
+    else if (recent && d.status !== "RED") col = "#39b54a";
+    const end = i + 1 < all.length ? all[i + 1].start : all[0].start + pts.length;
+    return {sec, f, col, cls, end};
+  });
+  const incs = (d.incidents || []).filter(i => i.state === "stopped" && i.kind !== "spin");
+  const key = [W, big ? 1 : 0, outline.length, pts[0] ? pts[0].map(f1).join() : "", m.rotation || 0, (m.corners || []).length,
+    secs.map(x => x.col + x.cls).join(), neutral, incs.map(i => i.id + i.kind).join()].join("|");
+
+  let st = "";
+  if (pts.length) {
+    const dp = line(pts) + "Z";
+    st += `<path class="t-glow" d="${dp}" stroke-width="${sw + 22}"/>
+      <path class="t-edge draw" d="${dp}" pathLength="1" stroke-width="${sw + 3}"/>
+      <path class="t-asph draw" d="${dp}" pathLength="1" stroke-width="${sw}"/>`;
+    if (opts.accent) st += `<path class="t-accent draw" d="${dp}" pathLength="1" stroke-width="2"/>`;
+    // SC / VSC / red: one unbroken loop; then each flagged sector on top (square ends, so the joins don't blot)
+    const band = (dd, col, cls, tip = "") => `<g class="t-flag ${cls}"><path d="${dd}" stroke="${col}" stroke-opacity=".2" stroke-width="${sw + 10}" stroke-linecap="butt"/>
+        <path d="${dd}" stroke="${col}" stroke-width="${Math.round(sw * .45)}" stroke-linecap="butt">${tip}</path></g>`;
+    if (neutral) st += band(dp, neutral, "");
+    secs.forEach(({sec, f, col, cls, end}) => {
       const seg = [];
       for (let j = sec.start; j <= end; j++) seg.push(pts[j % pts.length]);
-      const f = flags[String(sec.number)];
-      const recent = cleared[String(sec.number)] && (vnow() - new Date(cleared[String(sec.number)])) < 60000;
-      let col = "#4a5163", cls = "";
-      if (d.status === "RED") col = "#e10600";
-      else if (d.status === "SC" || d.status === "VSC") col = "#ffb000";
-      if (f === "YELLOW") col = "#ffd300";
-      else if (f === "DOUBLE YELLOW") { col = "#ffd300"; cls = "dbl"; }
-      else if (recent && d.status !== "RED") col = "#39b54a";
-      track += `<path d="${line(seg)}" fill="none" stroke="${col}" stroke-width="${opts.labels ? 5 : 3.5}" stroke-linecap="round" class="${cls}"><title>Marshal sector ${sec.number}${f ? ": " + f : ""}</title></path>`;
+      const sd = line(seg), tip = `<title>Marshal sector ${sec.number}${f ? ": " + f.toLowerCase() : ""}</title>`;
+      st += col && (col !== neutral || cls) ? band(sd, col, cls, tip) : `<path class="t-hit" d="${sd}" stroke-width="${sw}">${tip}</path>`;
     });
-  } else if (pts.length) track += `<path d="${line(pts)}Z" fill="none" stroke="#596075" stroke-width="2"/>`;
-  // start/finish line: both outline sources begin at the line, so draw a chequered bar across pts[0]
-  if (pts.length > 4) {
+  }
+  if (pts.length > 12) {
+    // start / finish: both outline sources begin at the line, so a chequered bar across pts[0]
     const [x0, y0] = pts[0], a = pts[pts.length - 3], b = pts[3];
     let dx = b[0] - a[0], dy = b[1] - a[1];
     const len = Math.hypot(dx, dy) || 1; dx /= len; dy /= len;
-    const half = sw / 2 + 3, cell = opts.labels ? 4 : 3, nx = -dy, ny = dx;
-    const ang = Math.atan2(ny, nx) * 180 / Math.PI, n = Math.round(2 * half / cell);
+    const half = sw / 2 + 2, cell = big ? 4 : 3, n = Math.round(2 * half / cell);
+    const ang = Math.atan2(dx, -dy) * 180 / Math.PI;
     let sq = "";
     for (let i = 0; i < n; i++) for (let j = 0; j < 2; j++)
-      sq += `<rect x="${(-half + i * cell).toFixed(1)}" y="${(j - 1) * cell}" width="${cell}" height="${cell}" fill="${(i + j) % 2 ? "#111" : "#fff"}"/>`;
-    track += `<g transform="translate(${x0.toFixed(1)},${y0.toFixed(1)}) rotate(${ang.toFixed(1)})"><title>Start / finish</title>${sq}</g>`;
+      sq += `<rect x="${f1(-half + i * cell)}" y="${(j - 1) * cell}" width="${cell}" height="${cell}" fill="${(i + j) % 2 ? "#111" : "#fff"}"/>`;
+    st += `<g class="t-sf" transform="translate(${f1(x0)},${f1(y0)}) rotate(${f1(ang)})"><title>Start / finish</title>${sq}</g>`;
+    // direction of travel, a little after the line
+    let i = 1;
+    for (let dist = 0; i < pts.length - 2 && dist < (big ? 48 : 22); i++) dist += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+    const q0 = pts[i - 1], q1 = pts[i + 1];
+    const da = Math.atan2(q1[1] - q0[1], q1[0] - q0[0]) * 180 / Math.PI, s = big ? 1.3 : .8;
+    st += `<g class="t-dir" transform="translate(${f1(pts[i][0])},${f1(pts[i][1])}) rotate(${f1(da)}) scale(${s})"><path d="M-6,-3.5 L-2,0 L-6,3.5 M0,-3.5 L4,0 L0,3.5"/></g>`;
   }
-  // corners
-  let corners = "";
+  const placed = [];
   if (opts.corners) (m.corners || []).forEach(c => {
-    const a = (c.angle || 0) * Math.PI / 180, off = 380;
+    const a = (c.angle || 0) * Math.PI / 180, off = 420;
     const [x, y] = P(c.x + Math.cos(a) * off, c.y + Math.sin(a) * off);
-    corners += `<text x="${x}" y="${y + 4}" font-size="11" fill="#8b91a1" text-anchor="middle">${c.number}</text>`;
+    placed.push({x: x - 9, y: y - 9, w: 18, h: 18});
+    st += `<g transform="translate(${f1(x)},${f1(y)})"><g class="t-corner"><circle r="8.5"/><text y="3.4" text-anchor="middle">${+c.number}</text></g></g>`;
   });
-  // cars + collision-avoiding labels (leader first)
-  const placed = [], dots = [], labels = [];
-  const fits = b => !placed.some(o => b.x < o.x + o.w && b.x + b.w > o.x && b.y < o.y + o.h && b.y + b.h > o.y);
-  cars.slice().sort((a, b) => (a.pos || 99) - (b.pos || 99)).forEach(c => {
-    const [x, y] = P(c.x, c.y), big = c.number === focus, r = opts.labels ? 7 : 5;
-    const qr = d.quali && d.quali.rows ? d.quali.rows[c.number] || {} : {}, push = qr.on_lap && !big;
-    dots.push(`<circle data-n="${c.number}" cx="${x}" cy="${y}" r="${big ? r + 3 : push ? r + 1 : r}" fill="${esc(c.colour)}" opacity="${qr.out_in ? .35 : 1}"
-      stroke="${big ? "#fff" : push ? "#2bd46b" : "#0d0e12"}" stroke-width="${big ? 2.5 : push ? 3 : 1.5}"><title>P${c.pos ?? "?"} ${esc(c.code)}${push ? " · on a flying lap" : qr.out_in ? " · knocked out" : ""}</title></circle>`);
-    if (!opts.labels) return;
-    const txt = `${c.pos ?? ""} ${c.code}`, w = txt.length * 7.4 + 6, h = 16;
-    for (const [dx, dy] of [[10, -20], [10, 4], [-10 - w, -20], [-10 - w, 4], [-w / 2, -30], [-w / 2, 12]]) {
-      const box = {x: x + dx, y: y + dy, w, h};
-      if (fits(box)) {
-        placed.push(box);
-        labels.push(`<g data-n="${c.number}" data-x="${x}" data-y="${y}"><rect x="${box.x}" y="${box.y}" width="${w}" height="${h}" rx="3" fill="#0d0e12" opacity=".85"/>
-          <text x="${box.x + 3}" y="${box.y + 12}" font-size="12" font-weight="700" fill="${esc(c.colour)}">${esc(txt)}</text></g>`);
-        break;
-      }
-    }
-  });
-  const incs = (d.incidents || []).filter(i => i.state === "stopped" && i.kind !== "spin").map(i => {
-    const [x, y] = P(i.x, i.y);
-    return `<g class="incmark"><circle cx="${x}" cy="${y}" r="${opts.labels ? 16 : 11}" fill="none" stroke="${i.kind === "crash" ? "#ff2a2a" : "#ffb000"}" stroke-width="3"/>
-      <text x="${x}" y="${y - (opts.labels ? 20 : 14)}" font-size="${opts.labels ? 14 : 11}" font-weight="900" text-anchor="middle" fill="${i.kind === "crash" ? "#ff4040" : "#ffb000"}">⚠ ${esc(i.code)}</text>
+  st += incs.map(i => {
+    const [x, y] = P(i.x, i.y), col = i.kind === "crash" ? "#ff2a2a" : "#ffb000", r = big ? 15 : 10;
+    return `<g class="t-inc" transform="translate(${f1(x)},${f1(y)})" style="--ic:${col}"><circle class="wave" r="${r}"/><circle r="${r}" fill="none" stroke="${col}" stroke-width="2.5"/>
+      <text y="${-r - 6}" font-size="${big ? 13 : 10}" text-anchor="middle" fill="${col}">${esc(i.code)}</text>
       <title>${i.kind === "crash" ? "Crash" : "Stopped"}: ${esc(i.code)}${i.corner ? " · Turn " + i.corner : ""}</title></g>`;
   }).join("");
-  return `<svg class="trk" data-proj="${[cs, sn, pad, minX, minY, k, H].join(",")}" viewBox="0 0 ${W} ${H}" width="100%" preserveAspectRatio="xMidYMid meet" style="display:block;margin:auto">${track}${corners}${incs}${dots.reverse().join("")}${labels.join("")}</svg>`;
+
+  // the cars, leader on top; labels placed so they don't overlap, each tied to its car by a short line
+  const T = vnow().getTime() - (typeof MAP_LAG === "number" ? MAP_LAG : 0);
+  const at = c => { const p = typeof carAt === "function" ? carAt(c.number, T) : null; return p ? P(p[1], p[2]) : P(c.x, c.y); };
+  const dots = [], labels = [];
+  const fits = b => b.x > 2 && b.x + b.w < W - 2 && b.y > 2 && b.y + b.h < H - 2 &&
+    !placed.some(o => b.x < o.x + o.w + 2 && b.x + b.w + 2 > o.x && b.y < o.y + o.h + 2 && b.y + b.h + 2 > o.y);
+  cars.slice().sort((a, b) => (a.pos || 99) - (b.pos || 99)).forEach(c => {
+    const [x, y] = at(c), me = c.number === focus, r = big ? 7 : 4.5;
+    const qr = d.quali && d.quali.rows ? d.quali.rows[c.number] || {} : {}, push = qr.on_lap && !me;
+    dots.push(`<circle data-n="${c.number}" class="car${me ? " me" : ""}${push ? " push" : ""}${qr.out_in ? " ko" : ""}" cx="${f1(x)}" cy="${f1(y)}"
+      r="${me ? r + 2 : r}" fill="${esc(c.colour)}" onclick="setFocus(${c.number}, true)"><title>P${c.pos ?? "?"} ${esc(c.code)}${push ? " · on a flying lap" : qr.out_in ? " · knocked out" : ""}</title></circle>`);
+    if (!big) return;
+    const pos = String(c.pos ?? ""), code = String(c.code || ""), pw = pos.length * 6.2, w = 12 + pw + (pos ? 5 : 0) + code.length * 7.6, h = 18;
+    for (const [dx, dy] of [[13, -24], [13, 6], [-13 - w, -24], [-13 - w, 6], [-w / 2, -36], [-w / 2, 18], [22, -9], [-22 - w, -9]]) {
+      const box = {x: x + dx, y: y + dy, w, h};
+      if (!fits(box)) continue;
+      placed.push(box);
+      const ax = Math.min(Math.max(x, box.x), box.x + w), ay = Math.min(Math.max(y, box.y), box.y + h);
+      const dl = Math.hypot(ax - x, ay - y) || 1, sx = x + (ax - x) / dl * (r + 1), sy = y + (ay - y) / dl * (r + 1);
+      labels.push(`<g class="t-lab${me ? " me" : ""}" data-n="${c.number}" data-x="${f1(x)}" data-y="${f1(y)}" onclick="setFocus(${c.number}, true)">
+        <line x1="${f1(sx)}" y1="${f1(sy)}" x2="${f1(ax)}" y2="${f1(ay)}" stroke="${esc(c.colour)}"/>
+        <rect class="bg" x="${f1(box.x)}" y="${f1(box.y)}" width="${f1(w)}" height="${h}" rx="3"/>
+        <rect x="${f1(box.x)}" y="${f1(box.y)}" width="3" height="${h}" fill="${esc(c.colour)}"/>
+        ${pos ? `<text class="p" x="${f1(box.x + 8)}" y="${f1(box.y + 13)}">${esc(pos)}</text>` : ""}
+        <text class="c" x="${f1(box.x + 8 + pw + (pos ? 5 : 0))}" y="${f1(box.y + 13)}">${esc(code)}</text></g>`);
+      break;
+    }
+  });
+  return {key: key + (opts.accent ? "|a" : ""), W, H, proj: [cs, sn, pad, minX, minY, k, H].join(","), st, cars: dots.reverse().join("") + labels.join(""), big};
+}
+// draw a map into el: the whole thing the first time (or when the circuit layer changes), otherwise only the cars
+function paintTrack(el, d, W, opts = {}) {
+  const L = trackLayers(d, W, opts);
+  if (!L) { if (!el.querySelector(".mapwait")) el.innerHTML = `<div class="mapwait">${ico("loader", "spin")}Waiting for location data…</div>`; return; }
+  const svg = el.querySelector("svg.trk");
+  if (svg && svg.dataset.key === L.key) { svg.querySelector(".t-cars").innerHTML = L.cars; return; }
+  el.innerHTML = `<svg class="trk${svg || opts.intro === false ? "" : " intro"}${L.big ? " big" : ""}" data-key="${esc(L.key)}" data-proj="${L.proj}" viewBox="0 0 ${L.W} ${L.H}" width="100%"
+      preserveAspectRatio="xMidYMid meet"><g class="t-static">${L.st}</g><g class="t-cars">${L.cars}</g>
+      <g class="focusring" style="display:none"><circle r="${L.big ? 14 : 9}"/></g></svg>`;
 }
 function lineChart(series, {W = 900, H = 320, yInvert = false, yLabel = "", xFmt = v => v, yFmt = v => v, yMax = null, yMin = null, bands = []} = {}) {
   const all = series.flatMap(s => s.points);

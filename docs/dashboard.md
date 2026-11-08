@@ -23,7 +23,7 @@ The full guide to the browser dashboard (`python3 -m f1hub gui`). For setup, see
 | **Live timing** | Race clock and time left to the 3-hour limit, track status, lap X of Y, driver names, last-lap S1/S2/S3 in F1 colours (purple = session best, green = personal best, yellow = slower), live championship points, gaps and intervals, tyre and its age, pits, last and best laps (fastest in purple), places gained since the grid, overtakes, mini track map, weather, live title fight |
 | **Race control** | Every message tagged and filterable (flags / safety car / stewards / session). Live marshal-sector flag board, SC/VSC/red-flag timeline, stewards' desk, and a per-driver record of deleted laps, black-and-white flags, black flags, investigations, penalties and blue flags |
 | **Red flag panel** | How long the race has been suspended, a countdown to the announced restart, the official restart order, standing or SC start, pit exit status, and a **RACE RESUMED** banner with the stoppage length. Also catches "will not be resumed" and shows the reduced-points title outcome |
-| **Track map** | Official circuit outline (MultiViewer data linked from OpenF1) at its real rotation, with corner numbers. **Marshal sectors are coloured by live flags**: yellow, flashing double yellow, green when just cleared, amber under SC/VSC, all red on a red flag. Cars sit on the track from live location data, with labels that don't overlap. The ghost button shows a ghost of the session's fastest lap against your selected driver's current lap |
+| **Track map** | Official circuit outline (MultiViewer data linked from OpenF1) at its real rotation, with corner numbers. **Marshal sectors are coloured by live flags**: yellow, flashing double yellow, green when just cleared, amber under SC/VSC, all red on a red flag. A chequered start/finish line and an arrow for the direction of travel. Cars glide along the track from live location data, with labels that don't overlap. **Click a car** (or a name in the running order) to select it without leaving the map: it gets a pulsing ring, and the ghost button races the session's fastest lap against its current lap. Click it again to let go. **3D view** (the 2D / 3D switch): the circuit at its real elevation (taken from the cars' own position data, stretched with the Height slider so the hills show), with an orbiting camera that spins slowly when left alone, or a camera that rides behind the selected car (or the leader). Drag to rotate, scroll to zoom, double-click to reset, click a car to select it. An elevation profile of the lap shows where every car is on the climbs. The choice is remembered |
 | **Insights** | Battles within 1 s, a "pit now" rejoin predictor using the circuit's published pit loss (green / SC / VSC), race pace over the last 5 clean laps, a lap chart (position every lap), theoretical best laps (best S1+S2+S3), speed traps (trap / I1 / I2), weather trend |
 | **Strategy & pits** | Stint-by-stint tyre chart for the whole field, every pit stop (pit-lane and stationary time), live overtakes feed |
 | **Gaps** | Gap-to-leader chart for the top 10, with SC/VSC/red-flag periods shaded |
@@ -182,6 +182,7 @@ Press `?` on the dashboard for the list.
 
 | Key | Action |
 |---|---|
+| `Ctrl`+`K` | Command palette: type a few letters to jump to any tab, Explore view, driver or action (also the search box at the end of the tab bar) |
 | `H` / `E` | Home / Explore |
 | `1`–`0` | Switch tabs |
 | `[` / `]` | Previous / next tab |
@@ -195,6 +196,8 @@ Press `?` on the dashboard for the list.
 | `Esc` | Close things |
 
 Your tab is remembered and is in the URL (`#map`, `#radio`, …), so you can bookmark a view.
+
+Each tab keeps its own scroll position, and the tab bar stays at the top of the window as you scroll. Animations follow your system's reduced-motion setting.
 
 ## Server safety and resilience
 

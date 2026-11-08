@@ -155,10 +155,15 @@ function ghostAt(t) {    // position of the ghost t seconds into its lap
 function drawGhost(svg, P, T) {
   let g = svg.querySelector(".ghost");
   const me = D && focus ? D.rows.find(r => r.number === focus) : null;
-  if (!GHOST.on || !GHOST.trace || !me || !me.lap_start) { if (g) g.remove(); return; }
+  if (!GHOST.on || !GHOST.trace || !me || !me.lap_start) {
+    if (g) g.remove();
+    const hint = `Ghost ready: <b>${esc(GHOST.code || "")}</b>'s fastest lap. Click a car on the map to race it.`;
+    if (GHOST.on && GHOST.trace && !me && $("ghostinfo").innerHTML !== hint) $("ghostinfo").innerHTML = hint;
+    return;
+  }
   const t = (T - new Date(me.lap_start).getTime()) / 1000, p = ghostAt(t);
   if (!p) { if (g) g.remove(); return; }
-  if (!g) { svg.insertAdjacentHTML("beforeend", `<g class="ghost"><circle r="9" fill="#ffffff" opacity=".35" stroke="#fff" stroke-dasharray="3 2"/><text font-size="11" font-weight="800" fill="#fff" opacity=".8" dy="-13" text-anchor="middle">👻</text></g>`); g = svg.querySelector(".ghost"); }
+  if (!g) { svg.insertAdjacentHTML("beforeend", `<g class="ghost"><circle class="gh-halo" r="13"/><circle r="7.5" fill="#c56cff" fill-opacity=".35" stroke="#e0a8ff" stroke-width="2" stroke-dasharray="3 2"/><text font-size="10" dy="-14" text-anchor="middle">BEST</text></g>`); g = svg.querySelector(".ghost"); }
   const [x, y] = P(p[6], p[7]);
   g.setAttribute("transform", `translate(${x.toFixed(1)},${y.toFixed(1)})`);
   // how far ahead is the ghost? compare lap fraction with the selected car's own progress
