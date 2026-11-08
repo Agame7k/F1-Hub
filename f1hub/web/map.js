@@ -7,6 +7,10 @@ const TRAIL = {};                 // number -> [[epoch_ms, x, y], ...]
 // seconds after they happen (OpenF1's own latency), so the buffer adapts to what we actually measure.
 let MAP_LAG = 4500, lagObs = [];
 function mergeTrails(d) {
+  if (d.seek !== mergeTrails.seek || d.session_key !== mergeTrails.sess) {      // a seek or another session: start over
+    for (const k in TRAIL) delete TRAIL[k];
+    mergeTrails.seek = d.seek; mergeTrails.sess = d.session_key;
+  }
   const cars = (d.map && d.map.cars) || [];
   const newest = Math.max(0, ...cars.map(c => c.trail && c.trail.length ? c.trail[c.trail.length - 1][0] : 0));
   if (newest && !(d.delay_status && d.delay_status.buffering)) {
@@ -19,7 +23,7 @@ function mergeTrails(d) {
   for (const c of cars) {
     const t = TRAIL[c.number] || (TRAIL[c.number] = []);
     for (const p of c.trail || []) if (!t.length || p[0] > t[t.length - 1][0]) t.push(p);
-    while (t.length > 2 && t[0][0] < t[t.length - 1][0] - 20000) t.shift();
+    while (t.length > 2 && t[0][0] < t[t.length - 1][0] - 150000) t.shift();     // ~2.5 min: a full lap and then some
   }
 }
 function carAt(n, T) {
@@ -50,7 +54,7 @@ function animateMaps(fromTimer) {
     document.querySelectorAll("main:not(.hidden) svg.trk").forEach(svg => {
       const [cs, sn, pad, minX, minY, k, H] = svg.dataset.proj.split(",").map(Number);
       const P = (x, y) => [pad + (x * cs - y * sn - minX) * k, H - (pad + (x * sn + y * cs - minY) * k)];
-      if (svg.closest("#bigmap")) drawGhost(svg, P, T);
+      if (svg.closest("#bigmap")) { drawGhost(svg, P, T); mapFx(svg, P, T); }
       svg.querySelectorAll("circle[data-n]").forEach(el => {
         const p = carAt(+el.dataset.n, T);
         if (!p) return;

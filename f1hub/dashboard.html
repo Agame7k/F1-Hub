@@ -117,6 +117,11 @@
     <p id="al-note"></p>
   </section>
   <section>
+    <h3>Test mode</h3>
+    <label class="switch"><input type="checkbox" id="testmode" onchange="setTestMode(this.checked)"> Show the test panel</label>
+    <p>Buttons that play the start lights, banners, map effects and celebrations on demand, using the session that's loaded. Only on this screen; the data isn't touched.</p>
+  </section>
+  <section>
     <h3>Layout</h3>
     <div class="row2" id="layouts"></div>
     <p>The mini tower (⧉ in the header) floats a small always-on-top timing tower over your stream.</p>
@@ -260,7 +265,9 @@
     <div class="card"><h2>Live track position <span class="sub" id="maphint"></span>
       <div class="seg" id="mapview" role="group" aria-label="Map view"><button data-v="2d" class="on">2D</button><button data-v="3d">3D</button></div>
       <label class="switch sub" title="Races the fastest lap against the car you select on the map"><input type="checkbox" id="ghoston" onchange="toggleGhost(this.checked)"> Ghost of the fastest lap</label></h2>
-      <div class="ghostinfo" id="ghostinfo"></div>
+      <div class="seg sub" id="mapcolour" role="group" aria-label="Colour the track with the selected car's last lap" title="Colour the track with the selected car's last lap">
+        <button data-m="off" class="on">Track</button><button data-m="speed">Speed</button><button data-m="throttle">Throttle</button><button data-m="brake">Brake</button></div>
+      <div class="ghostinfo" id="ghostinfo"></div><div class="ghostinfo" id="maplapinfo"></div>
       <div id="bigmap" class="pad mapwrap"></div>
       <div id="map3d" class="hidden"><canvas id="m3dc" aria-label="3D track map: drag to rotate, scroll to zoom, click a car to select it"></canvas>
         <div class="m3dbar">
@@ -273,7 +280,8 @@
       </div>
       <div class="maplegend"><span><i class="lg-y"></i>Yellow</span><span><i class="lg-yy"></i>Double yellow</span><span><i class="lg-g"></i>Just cleared</span>
         <span><i class="lg-sc"></i>SC / VSC</span><span><i class="lg-me"></i>Selected car - click any car</span><span><i class="lg-push"></i>On a flying lap</span>
-        <span><i class="lg-ghost"></i>Ghost</span></div></div>
+        <span><i class="lg-ghost"></i>Ghost</span><span><i class="lg-tyre"></i>Ring: tyre compound</span><span><i class="lg-battle"></i>Within 1 s</span>
+        <span><i class="lg-sec"></i>Purple sector</span></div></div>
     <div class="card"><h2>Running order</h2><div class="feed" id="maporder" style="max-height:700px"></div></div>
   </div>
 </main>
@@ -429,6 +437,8 @@
 <script src="/static/stewards.js"></script>
 <script src="/static/render.js"></script>
 <script src="/static/map3d.js"></script>
+<script src="/static/racefx.js"></script>
+<script src="/static/demo.js"></script>
 <script src="/static/explore.js"></script>
 <script src="/static/home.js"></script>
 <script src="/static/status.js"></script>

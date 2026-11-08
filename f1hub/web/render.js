@@ -35,6 +35,8 @@ function render(d, fromCtl) {
   safe("penalty points", () => { if (activeTab === "rc") loadPoints(); });
   safe("mini tower", () => renderPip(d));
   safe("ghost", () => refreshGhost(false));
+  safe("race moments", () => raceMoments(d));
+  safe("lap colours", () => refreshLapColour());
   $("error").classList.toggle("hidden", !d.error);
   $("error").textContent = d.error || "";
   if (!d.rows) return;

@@ -209,11 +209,30 @@ function m3dDraw(now, dt) {
     });
   }
   M3D.hits = [];
+  const rowOf = {}; D.rows.forEach(r => rowOf[r.number] = r);
   cars.forEach(x => {
     const p = pr(x.p), base = pr([x.p[0], x.p[1], x.p[2] - lift]);
     if (!p) return;
     const col = hexRgb(x.c.colour), mine = x.c.number === focus, push = x.q.on_lap && !mine;
     const s = Math.max(3.5, g.w * 0.42 * focal / p[2]) * (mine ? 1.25 : 1);
+    // where it was a moment ago: the tail, and which way the nose points
+    const back = [];
+    for (let k = 1; k <= 6; k++) {
+      const q = carAt(x.c.number, T - k * 150), w = q && pr(m3dWorld(g, q[1], q[2], lift).p);
+      if (w) back.push(w);
+    }
+    let dir = null;
+    if (back.length) { const dx = p[0] - back[0][0], dy = p[1] - back[0][1], l = Math.hypot(dx, dy); if (l > 0.6) dir = [dx / l, dy / l]; }
+    if (back.length > 1 && dir && !REDUCED.matches) sprite(p[2] + 0.5, () => {
+      ctx.lineCap = "round";
+      let a = p;
+      back.forEach((b, i) => {
+        ctx.strokeStyle = rgba(col, 0.5 * (1 - i / back.length)); ctx.lineWidth = Math.max(1, s * 0.9 * (1 - i / back.length));
+        ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke(); a = b;
+      });
+      ctx.lineCap = "butt";
+    });
+    const tyre = rowOf[x.c.number] && TYRE[rowOf[x.c.number].compound];
     M3D.hits.push({n: x.c.number, x: p[0], y: p[1], r: s});
     lab.push({x: p[0], y: p[1], s, z: p[2], c: x.c, mine});
     sprite(p[2], () => {
@@ -222,7 +241,16 @@ function m3dDraw(now, dt) {
       const gr = ctx.createRadialGradient(p[0] - s * .35, p[1] - s * .4, s * .1, p[0], p[1], s);
       gr.addColorStop(0, rgba(mix(col, [255, 255, 255], .55))); gr.addColorStop(.55, rgba(col)); gr.addColorStop(1, rgba(mix(col, [0, 0, 0], .5)));
       ctx.fillStyle = gr; ctx.strokeStyle = mine ? "#fff" : push ? "#2bd46b" : "#0b0c10"; ctx.lineWidth = mine ? 2.2 : push ? 2.5 : 1.4;
+      if (dir) {        // the nose
+        const nx = -dir[1], ny = dir[0];
+        ctx.beginPath(); ctx.moveTo(p[0] + dir[0] * s * 1.9, p[1] + dir[1] * s * 1.9);
+        ctx.lineTo(p[0] + dir[0] * s * 0.5 + nx * s * 0.62, p[1] + dir[1] * s * 0.5 + ny * s * 0.62);
+        ctx.lineTo(p[0] + dir[0] * s * 0.5 - nx * s * 0.62, p[1] + dir[1] * s * 0.5 - ny * s * 0.62); ctx.closePath();
+        ctx.fillStyle = rgba(col); ctx.fill(); ctx.lineWidth = 1.2; ctx.stroke();
+        ctx.fillStyle = gr;
+      }
       ctx.beginPath(); ctx.arc(p[0], p[1], s, 0, 7); ctx.fill(); ctx.stroke();
+      if (tyre && tyre !== TYRE.UNKNOWN) { ctx.strokeStyle = tyre; ctx.lineWidth = Math.max(1.5, s * 0.22); ctx.beginPath(); ctx.arc(p[0], p[1], s + ctx.lineWidth * 0.5 + 1.2, 0, 7); ctx.stroke(); }
       if (mine) {
         const ph = (now % 1600) / 1600;
         ctx.globalAlpha = 1 - ph; ctx.strokeStyle = "#fff"; ctx.lineWidth = 1.5;

@@ -696,7 +696,46 @@ class LiveTracker:
         rem_before = ([True] + remaining[1:]) if self.is_sprint else [False] + remaining
         champ_before, _ = title_status(before, rem_before, rules=season.rules)
         self.title_decided_before = champ_before.code if champ_before else None
+        self._team_pic = self._team_title(season, this_round, entries, remaining)
         return table, champ, contenders, remaining, table_pts
+
+    def _team_title(self, season, this_round, drivers, remaining):
+        """The constructors' championship if the session finished like this: the teams' totals before this weekend
+        plus what each driver is scoring now, credited to the team they're driving for today."""
+        teams = {}
+        for t in season.standings(upto=this_round - 1)[1]:
+            teams[t.name] = Entry(t.name, t.code, t.name, points=t.points, finishes=list(t.finishes), wins=t.wins)
+            teams[t.name].start = t.points
+        for n, e in drivers.items():
+            name = (self.drivers.get(n) or {}).get("team_name")
+            if not name:
+                continue
+            t = teams.get(name)
+            if t is None:
+                t = teams[name] = Entry(name, name[:3].upper(), name)
+                t.start = 0
+            t.points += e.points - e.start
+            pos = self.position.get(n)
+            if not self.is_sprint and pos and not self.retired.get(n):
+                t.finishes.append(pos)
+                t.wins += pos == 1
+        if not teams:
+            return None
+        table = sort_standings(teams.values())
+        champ, contenders = title_status(table, remaining, constructor=True, rules=season.rules)
+        rem_before = ([True] + remaining[1:]) if self.is_sprint else [False] + remaining
+        before = [Entry(t.name, t.code, points=t.start) for t in table]
+        champ_before, _ = title_status(before, rem_before, constructor=True, rules=season.rules)
+        colour = lambda name: next(("#" + self.colour(n) for n, d in self.drivers.items() if d.get("team_name") == name), "#ffffff")
+        info = lambda t: {"name": t.name, "colour": colour(t.name), "points": t.points, "wins": t.wins,
+                          "drivers": [{"code": self.code(n), "name": d.get("full_name"), "headshot": d.get("headshot_url")}
+                                      for n, d in self.drivers.items() if d.get("team_name") == t.name][:2]}
+        return {"champion": champ.name if champ else None,
+                "champion_info": dict(info(champ), margin=champ.points - table[1].points if len(table) > 1 else None) if champ else None,
+                "decided_before": champ_before.name if champ_before else None,
+                "year": self.session.get("year"), "rounds_left": len(remaining),
+                "contenders": [t.name for t in contenders],
+                "table": [{"name": t.name, "points": t.points, "colour": colour(t.name)} for t in table[:6]]}
 
     def snapshot(self, season=None):
         """Everything the GUI needs, as plain JSON-able data."""
@@ -747,7 +786,9 @@ class LiveTracker:
                     "table": [{"code": e.code, "name": e.name, "points": e.points, "delta": e.points - e.start}
                               for e in table[:8]]}
 
+        self._team_pic = None
         scenarios = [title(self.live_title_picture(season), "If it finished like this")]
+        team_title = self._team_pic
         if self.track_status == "RED" and self.is_race and not self.is_sprint:
             laps_done = max(0, lead_lap - 1)
             pct = round(laps_done / self.scheduled_laps * 100) if self.scheduled_laps else None
@@ -771,6 +812,7 @@ class LiveTracker:
             "messages": [{"lap": m.get("lap_number"), "time": m["date"][11:19], "category": m.get("category"),
                           "flag": m.get("flag"), "text": m.get("message")} for m in self.messages[-40:]][::-1],
             "title": [t for t in scenarios if t],
+            "team_title": team_title,
             "quali": quali.picture(self) if quali.is_quali(self.session.get("session_name")) else None,
             **self._extras(),
         }

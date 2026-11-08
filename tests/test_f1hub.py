@@ -860,3 +860,48 @@ class StewardsGridAndPoints(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ConstructorsTitleLive(unittest.TestCase):
+    """The constructors' title if the race finished in the current order: points before the weekend plus what each
+    driver is scoring now, credited to the team they drive for today."""
+    def tracker(self, team_start, scoring):
+        from f1hub.live import LiveTracker
+        from f1hub.rules import RULES
+        t = LiveTracker.__new__(LiveTracker)
+        t.is_sprint, t.retired, t.session = False, {}, {"year": 2026}
+        t.drivers = {1: {"team_name": "Alpha", "full_name": "A One"}, 2: {"team_name": "Alpha", "full_name": "A Two"},
+                     3: {"team_name": "Bravo", "full_name": "B One"}, 4: {"team_name": "Bravo", "full_name": "B Two"}}
+        t.position = {n: i + 1 for i, n in enumerate(sorted(scoring, key=scoring.get, reverse=True))}
+        t.code = lambda n: f"D{n}"
+        t.colour = lambda n: "ABCDEF"
+        teams = [Entry(name, name[:3].upper(), name, points=pts) for name, pts in team_start.items()]
+        season = mock.Mock(rules=RULES)
+        season.standings.return_value = ([], teams, {})
+        drivers = {}
+        for n, pts in scoring.items():
+            e = Entry(f"D{n}", f"D{n}", points=100 + pts)
+            e.start = 100
+            drivers[n] = e
+        return t, season, drivers
+
+    def test_decided_today(self):
+        t, season, drivers = self.tracker({"Alpha": 500, "Bravo": 480}, {3: 25, 4: 18, 1: 15, 2: 0})
+        pic = t._team_title(season, 24, drivers, [])          # the final round
+        self.assertEqual(pic["champion"], "Bravo")
+        self.assertEqual(pic["champion_info"]["points"], 523)
+        self.assertEqual(pic["champion_info"]["margin"], 8)
+        self.assertIsNone(pic["decided_before"])
+        self.assertEqual([d["code"] for d in pic["champion_info"]["drivers"]], ["D3", "D4"])
+
+    def test_already_decided_is_not_news(self):
+        t, season, drivers = self.tracker({"Alpha": 600, "Bravo": 400}, {3: 25, 4: 18, 1: 15, 2: 0})
+        pic = t._team_title(season, 24, drivers, [])
+        self.assertEqual(pic["champion"], "Alpha")
+        self.assertEqual(pic["decided_before"], "Alpha")
+
+    def test_still_open(self):
+        t, season, drivers = self.tracker({"Alpha": 500, "Bravo": 480}, {3: 25, 4: 18, 1: 15, 2: 0})
+        pic = t._team_title(season, 20, drivers, [False, False, False])
+        self.assertIsNone(pic["champion"])
+        self.assertEqual(set(pic["contenders"]), {"Alpha", "Bravo"})

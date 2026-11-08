@@ -1,4 +1,4 @@
-/* F1 Hub dashboard - race-winner and champion celebrations.
+/* F1 Hub dashboard - race-winner, World Champion and Constructors' Champion celebrations.
    A classic script: it shares the page's global scope with the others, loaded in the order dashboard.html
    lists them (functions in a later file aren't defined yet while an earlier one runs). */
 /* ---------- celebrations: race winner, and a bigger show when the World Championship is decided ---------- */
@@ -15,7 +15,7 @@ function checkCelebrations(d) {
   if (!ev) { celeb.armed[d.session_key] = true; return; }      // seen it unfinished -> a later finish is "live"
   const replay = d.mode === "replay";
   // live/delayed: once per session (survives reloads). replay: once per replay run, only if we watched it happen
-  const key = onceKey(ev.champion ? "champ" : "win") + (replay ? ".replay" : "");
+  const key = onceKey([ev.champion ? "champ" : "win", ev.team ? "teams" : ""].join("")) + (replay ? ".replay" : "");
   if (replay ? celeb.armed[d.session_key] && !celeb.armed[key] : !store.get(key, false) && celeb.armed[d.session_key]) {
     celeb.armed[key] = true;
     if (!replay) store.set(key, true);
@@ -33,11 +33,12 @@ function buildEvent(d) {
   const abandoned = d.rc && d.rc.red_flag && d.rc.red_flag.state === "abandoned";
   const tt = abandoned ? ((d.title || []).find(t => /stopped|reduced|red/i.test(t.label) && t.champion) || t) : t;
   const champion = tt && tt.champion && !tt.decided_before ? tt : null;
-  return {podium: top, winner: top[0], champion, meeting: d.meeting, session: d.session};
+  const ct = d.team_title, team = ct && ct.champion && ct.champion_info && !ct.decided_before && !abandoned ? ct : null;
+  return {podium: top, winner: top[0], champion, team, meeting: d.meeting, session: d.session};
 }
 function replayCelebration() { if (celeb.last) showCelebration(celeb.last); }
 function closeCelebration() {
-  $("celeb").className = ""; clearTimeout(celeb.timer); cancelAnimationFrame(celeb.raf); celeb.parts = [];
+  $("celeb").className = ""; $("celeb").style.removeProperty("--tc"); clearTimeout(celeb.timer); cancelAnimationFrame(celeb.raf); celeb.parts = [];
 }
 function showCelebration(ev) {
   closeCelebration();
@@ -53,8 +54,10 @@ function showCelebration(ev) {
       return `<div class="step"><div class="lbl" style="animation-delay:${3 + k * .25}s;color:${esc(r.colour)}">${esc(r.code)}</div>
         <div class="blk" style="height:${[120, 170, 90][k]}px;background:linear-gradient(${esc(r.colour)},${esc(r.colour)}66);animation-delay:${2.8 + k * .25}s">${i + 1}</div></div>`; }).join("")}</div>`;
   const colours = [w.colour, "#ffffff", ...(ev.podium.map(r => r.colour))];
+  if (ev.test) st.insertAdjacentHTML("beforeend", `<div class="c-test">Test mode - not a real result</div>`);
   fx(colours, false);
   if (ev.champion) celeb.timer = setTimeout(() => showChampion(ev), 7000);
+  else if (ev.team) celeb.timer = setTimeout(() => showTeams(ev), 7000);
   else celeb.timer = setTimeout(closeCelebration, 14000);
 }
 function showChampion(ev) {
@@ -85,8 +88,32 @@ function showChampion(ev) {
     <div class="wc-stats">${stats.map((x, i) => `<div style="animation-delay:${4.6 + i * .2}s"><b data-count="${x[1]}">0</b><span>${x[0]}</span></div>`).join("")}</div>
     ${fins.length ? `<div class="wc-season">${fins.map((f, i) => `<i class="${!f ? "dnf" : f === 1 ? "g" : f <= 3 ? "s" : ""}" style="animation-delay:${6 + i * .08}s">${f || "×"}</i>`).join("")}<i class="g now" style="animation-delay:${6 + fins.length * .08}s">🏆</i></div>` : ""}`;
   setTimeout(() => st.querySelectorAll("[data-count]").forEach(b => countUp(b, +b.dataset.count, 1800)), 4700);
+  if (ev.test) st.insertAdjacentHTML("beforeend", `<div class="c-test">Test mode - not a real result</div>`);
   fx(["#ffd34d", "#fff3b0", "#ffffff", tc, "#ffb800"], true);
-  celeb.timer = setTimeout(closeCelebration, 40000);
+  celeb.timer = ev.team ? setTimeout(() => showTeams(ev), 24000) : setTimeout(closeCelebration, 40000);
+}
+// the Constructors' Championship: the team's colours, both drivers, and the season's numbers
+function showTeams(ev) {
+  cancelAnimationFrame(celeb.raf); celeb.parts = [];
+  const t = ev.team, c = t.champion_info, el = $("celeb"), st = $("cstage"), tc = c.colour || "#ffd34d";
+  el.className = "on teams"; el.style.setProperty("--tc", tc);
+  const words = "CONSTRUCTORS' CHAMPIONS";
+  const letters = [...words].map((ch, i) => `<span style="animation-delay:${2 + i * .045}s, ${3.2 + i * .045}s">${ch === " " ? "&nbsp;" : esc(ch)}</span>`).join("");
+  const stats = [["POINTS", c.points], ["WINS", c.wins], ["LEAD", c.margin]].filter(x => x[1] != null);
+  const drivers = (c.drivers || []).map((d, i) => `<div class="tc-drv" style="animation-delay:${3.8 + i * .25}s">
+      ${d.headshot ? `<img src="${esc(d.headshot)}" alt="" onerror="this.remove()">` : `<div class="wc-initials">${esc(d.code || "")}</div>`}
+      <b>${esc(d.code || "")}</b><small>${esc(d.name || "")}</small></div>`).join("");
+  st.innerHTML = `<div class="wc-rays tc-rays"></div><div class="tc-stripes"></div><div class="wc-flash"></div>
+    <div class="wc-kicker">${t.year || ""} FIA FORMULA ONE</div>
+    <div class="wc-title tc-title">${letters}</div>
+    <div class="tc-name">${esc(c.name)}</div>
+    <div class="tc-drivers">${drivers}</div>
+    <div class="wc-sub tc-sub">${ico("trophy")} Crowned at the ${esc(ev.meeting || "")} with ${t.rounds_left} round${t.rounds_left === 1 ? "" : "s"} to spare</div>
+    <div class="wc-stats tc-stats">${stats.map((x, i) => `<div style="animation-delay:${4.8 + i * .2}s"><b data-count="${x[1]}">0</b><span>${x[0]}</span></div>`).join("")}</div>`;
+  setTimeout(() => st.querySelectorAll("[data-count]").forEach(b => countUp(b, +b.dataset.count, 1800)), 4900);
+  if (ev.test) st.insertAdjacentHTML("beforeend", `<div class="c-test">Test mode - not a real result</div>`);
+  fx([tc, "#ffffff", tc, "#ffd34d", tc], true);
+  celeb.timer = setTimeout(closeCelebration, 32000);
 }
 function countUp(el, to, ms) {
   const t0 = performance.now(), dec = to % 1 ? 1 : 0;

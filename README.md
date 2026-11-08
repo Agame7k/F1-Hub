@@ -46,7 +46,7 @@ python3 -m f1hub live     # the same live timing in the terminal
 | **Live timing** | Timing tower with sector colours, gaps, tyres, pits, live championship points, mini map, weather. Qualifying drop zones and a provisional grid with penalties applied |
 | **Race control** | Every message tagged and filterable, marshal-sector flag board, SC/VSC/red-flag timeline, per-driver stewarding record, penalty points and reprimands, the exact FIA rule behind each penalty |
 | **Red flag panel** | Suspension timer, restart countdown and order, reduced-points title outcome |
-| **Track map** | Official circuit outline with marshal sectors coloured by live flags, cars animated from location data, a ghost of the fastest lap |
+| **Track map** | Official circuit outline with marshal sectors coloured by live flags, cars animated from location data, a ghost of the fastest lap, battles, pit stops, purple sectors and start lights |
 | **Insights** | Battles, pit-now rejoin predictor, race pace, lap chart, theoretical best laps, speed traps |
 | **Strategy & pits** | Tyre stints for the whole field, pit stops, undercut watch, tyre degradation |
 | **Gaps** | Gap-to-leader chart with neutralised periods shaded |
