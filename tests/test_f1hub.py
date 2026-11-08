@@ -307,6 +307,83 @@ class StreamParsing(unittest.TestCase):
             self.assertEqual((ptype, len(body)), (3, n))
 
 
+class StreamRecordingAndPush(unittest.TestCase):
+    @staticmethod
+    def _msg(topic, row):
+        import json
+        import struct
+        t = f"v1/{topic}".encode()
+        return struct.pack("!H", len(t)) + t + json.dumps(row).encode()
+
+    def test_records_raw_messages_and_measures_lag(self):
+        import gzip
+        import json
+        import tempfile
+        import time
+        from datetime import datetime, timezone
+        from pathlib import Path
+        from unittest import mock
+        from f1hub import api
+        from f1hub.stream import Stream
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(api, "RECORD_DIR", Path(d)):
+            s = Stream(connect=False)
+            seen = []
+            s.on_message = seen.append
+            happened = datetime.fromtimestamp(time.time() - 3, timezone.utc).isoformat()
+            s._publish(self._msg("position", {"session_key": 1, "driver_number": 4, "position": 1,
+                                              "date": happened, "_id": 7, "_key": "a"}))
+            s._flush_record()
+            lines = [json.loads(l) for l in gzip.open(next(Path(d).glob("*/stream.jsonl.gz")), "rt")]
+        self.assertEqual(seen, ["position"])
+        self.assertEqual((lines[0]["topic"], lines[0]["row"]["_key"]), ("position", "a"))
+        self.assertAlmostEqual(lines[0]["rx"], time.time(), delta=5)
+        self.assertAlmostEqual(s.lag()["position"], 3, delta=0.5)
+
+    def test_timing_message_rebuilds_frame_at_once(self):
+        import threading
+        import time
+        from unittest import mock
+        from f1hub import gui, live
+        from f1hub.stream import Stream
+
+        class Tracker:
+            def __init__(self, key):
+                self.key, self.session, self.stream, self.builds = key, {}, None, 0
+            streaming = lambda self, e=None: True
+            set_view = set_focus = lambda self, v: None
+            def refresh(self):
+                self.stream.drain("position")
+                self.builds += 1
+            snapshot = lambda self, season: {"rows": [], "data_time": time.time()}
+
+        with mock.patch.object(gui.api, "authenticated", lambda: False), \
+                mock.patch("f1hub.transcribe.Transcriber", lambda: None):
+            f = gui.Feed(None, 5, 10)
+        s = Stream(connect=False)
+        s.connected, s.last_msg = True, time.time()
+        s.on_message = f._on_stream
+        f.stream = s
+        with mock.patch.object(live, "LiveTracker", Tracker):
+            threading.Thread(target=f.run, daemon=True).start()
+            for _ in range(50):
+                if f.frame_no:
+                    break
+                time.sleep(0.02)
+            time.sleep(0.3)
+            seen, before = f.frame_no, f.live_tracker.builds
+            t0 = time.time()
+            for n in range(20):                  # one burst: the whole field's positions
+                s._publish(self._msg("position", {"session_key": 5, "driver_number": n, "position": n,
+                                                  "date": "2026-11-07T14:00:00+00:00"}))
+            got = f.wait_frame(seen, 0.8)
+            took = time.time() - t0
+            time.sleep(0.3)
+        self.assertGreater(got, seen)
+        self.assertLess(took, 0.5)               # not waiting for the 1 s tick
+        self.assertLessEqual(f.live_tracker.builds - before, 2)   # one rebuild for the burst (+ maybe the 1 s tick)
+        self.assertLessEqual(len(f.history), 2)  # delay buffer keeps ~1 frame a second
+
+
 class LapTrace(unittest.TestCase):
     def test_trace_and_spoiler_cutoff(self):
         from f1hub import laptrace

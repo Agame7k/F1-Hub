@@ -912,11 +912,15 @@ $("scrub").onchange = e => {
   ctl({at: new Date(a + (b - a) * e.target.value / 1000).toISOString()});
 };
 let scrubbing = false; $("scrub").onpointerdown = () => scrubbing = true; $("scrub").onpointerup = () => scrubbing = false;
+function streamLag(lag) {
+  const v = lag && (lag.position ?? lag.intervals ?? lag.location);
+  return v == null ? "" : ` · OpenF1 delay ${v.toFixed(1)} s`;
+}
 function renderMode(d) {
   const st = d.settings || {}, chip = $("modechip");
   const fs = d.feed && d.feed.stream, fc = $("feedchip");
   if (d.mode === "replay") { fc.className = "feedchip"; fc.textContent = "RECORDED DATA"; }
-  else if (fs && fs.healthy) { fc.className = "feedchip on"; fc.textContent = "REAL-TIME STREAM"; fc.title = `MQTT stream · ${fs.received} messages`; }
+  else if (fs && fs.healthy) { fc.className = "feedchip on"; fc.textContent = "REAL-TIME STREAM"; fc.title = `MQTT stream · ${fs.received} messages` + streamLag(fs.lag) + (d.feed.push ? " · pushed to this page" : ""); }
   else { fc.className = "feedchip"; fc.textContent = "POLLING"; fc.title = fs && fs.error ? "Stream unavailable: " + fs.error : "REST polling, priority on the tab you're viewing"; }
   if (d.control_error) { $("error").classList.remove("hidden"); $("error").textContent = "Settings: " + d.control_error; }
   if (d.mode === "replay") { chip.className = "modechip replay"; chip.textContent = "REPLAY"; }
@@ -958,7 +962,7 @@ function mergeTrails(d) {
   const newest = Math.max(0, ...cars.map(c => c.trail && c.trail.length ? c.trail[c.trail.length - 1][0] : 0));
   if (newest && !(d.delay_status && d.delay_status.buffering)) {
     // positions come in bursts, so size the buffer to the worst lag of the last ~30 s, not the average
-    lagObs.push(vnow().getTime() - newest + 1100);   // + time until the next poll brings more
+    lagObs.push(vnow().getTime() - newest + (LIVE.open ? 400 : 1100));   // + time until the next frame brings more
     if (lagObs.length > 30) lagObs.shift();
     const want = Math.min(15000, Math.max(800, ...lagObs));
     MAP_LAG = want > MAP_LAG ? want : MAP_LAG * 0.95 + want * 0.05;    // grow at once, shrink gently
@@ -2703,10 +2707,34 @@ setInterval(loadHome, 60000);
 loadHome();
 
 poll("/api/live", render); poll("/api/season", renderSeason);
-// pull from the local server about once a second (it's local, cheap); the server decides what to fetch from OpenF1
+// The server pushes each new frame over /api/events (several a second while the MQTT stream is up). If that
+// isn't open - old browser, too many tabs, server restarting - pull /api/live about once a second instead.
+const LIVE = {es: null, open: false, retry: 0};
+function startEvents() {
+  if (!window.EventSource || LIVE.es || document.hidden) return;
+  const es = LIVE.es = new EventSource("/api/events");
+  es.onopen = () => { LIVE.open = true; };
+  es.onmessage = e => {
+    let d;
+    try { d = JSON.parse(e.data); } catch (err) { return; }
+    if (NET.down) { NET.down = 0; $("offline").classList.add("hidden"); }
+    if (!CTL.busy) safe("/api/live", () => render(d));
+  };
+  es.onerror = () => {
+    LIVE.open = false;                       // polling takes over (and shows "Reconnecting…" if the server is gone)
+    if (es.readyState === EventSource.CLOSED) {          // refused (e.g. too many tabs): try again later
+      stopEvents();
+      clearTimeout(LIVE.retry);
+      LIVE.retry = setTimeout(startEvents, 30000);
+    }
+  };
+}
+function stopEvents() { if (LIVE.es) LIVE.es.close(); LIVE.es = null; LIVE.open = false; }
+document.addEventListener("visibilitychange", () => document.hidden ? stopEvents() : startEvents());
+startEvents();
 let liveBusy = false;
 async function livePoll() {
-  if (!liveBusy) {
+  if (!liveBusy && !LIVE.open) {
     liveBusy = true;
     const gen = CTL.gen;      // asked before a click? then it shows the old state - drop it
     await poll("/api/live", d => { if (!CTL.busy && gen === CTL.gen) render(d); });

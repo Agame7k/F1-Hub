@@ -1,7 +1,8 @@
 """Browser dashboard: python3 -m f1hub gui  ->  http://localhost:8765
 
 One background thread talks to OpenF1 (so the 60 requests/minute limit holds no matter
-how many browser tabs are open); the page polls this local server.
+how many browser tabs are open). With the MQTT stream, a timing message rebuilds the frame within
+~0.1 s and /api/events pushes it to the page (Server-Sent Events); the page falls back to polling.
 
 Modes
   live    - latest data, optionally shown N seconds late to match your TV/stream (delay)
@@ -27,6 +28,12 @@ PAGE = Path(__file__).with_name("dashboard.html")
 REPLAY_TICK = 1.0        # seconds of wall time between replay refreshes
 MAX_SPEED = 10
 HISTORY_SECONDS = 15 * 60
+PUSH_DEBOUNCE = 0.08     # after a streamed timing message, wait this long for the rest of its burst (20 cars)
+PUSH_MIN_GAP = 0.25      # ...but never rebuild the frame more than 4 times a second
+HISTORY_STEP = 0.9       # the delay buffer keeps about one frame a second (the newest of each second)
+MAX_EVENT_STREAMS = 4    # browsers allow ~6 connections per site; leave room for the page's other requests
+# streamed topics that change what's on screen right away; location / car_data ride along with the next frame
+URGENT_TOPICS = {"position", "intervals", "laps", "race_control", "pit", "stints", "overtakes", "team_radio", "weather"}
 
 
 def _fia_published(s):
@@ -302,11 +309,36 @@ class Feed:
         self.stream = None                  # real-time MQTT (paid accounts)
         self.control_error = None
         self.loading = None                 # "Loading replay..." while a replay session is fetched
+        self.push_at = 0.0                  # when an unhandled streamed timing message arrived (0 = none)
+        self.frame_no = 0                   # bumps whenever self.live changes; /api/events waits on it
+        self.frame_cv = threading.Condition()
+        self.event_streams = 0
+        self.build_ms = None                # how long the last frame took to build
+        self._hist_at = 0.0
         from .transcribe import Transcriber
         self.stt = Transcriber()            # team radio speech-to-text (needs the .venv; optional)
         if api.authenticated():
             from .stream import Stream
             self.stream = Stream()
+            self.stream.on_message = self._on_stream
+
+    def _on_stream(self, topic):
+        """Network thread: a streamed timing message - have the feed thread rebuild the frame now."""
+        if topic in URGENT_TOPICS and not self.push_at:
+            self.push_at = time.time()
+            self.wake.set()
+
+    def _new_frame(self):
+        with self.frame_cv:
+            self.frame_no += 1
+            self.frame_cv.notify_all()
+
+    def wait_frame(self, seen, timeout):
+        """HTTP threads: block until there's a frame newer than `seen` (or timeout); returns the latest number."""
+        with self.frame_cv:
+            if self.frame_no == seen:
+                self.frame_cv.wait(timeout)
+            return self.frame_no
 
     # ----------------------------------------------------------------- control (from HTTP threads)
     def control(self, **kw):
@@ -392,7 +424,7 @@ class Feed:
     # ----------------------------------------------------------------- feed thread
     def run(self):
         from .live import LiveTracker
-        next_live = 0.0
+        next_live = last_build = 0.0
         while True:
             try:
                 with self.lock:
@@ -428,23 +460,41 @@ class Feed:
                             self.live_tracker.set_focus(self.focus)
                         self.live_tracker.set_view(self.view)
                         self.live_tracker.stream = self.stream
-                    if time.time() >= next_live or todo:
+                    now = time.time()
+                    push_ready = max(self.push_at + PUSH_DEBOUNCE, last_build + PUSH_MIN_GAP) if self.push_at else None
+                    pushed = push_ready is not None and now >= push_ready and self.live_tracker.streaming()
+                    if now >= next_live or todo or pushed:
                         tick = 1.0 if self.live_tracker.streaming() else 2.0   # REST calls are paced inside refresh()
                         if self._session_over():
                             tick = 30.0       # nothing new comes after a session: save the API for the home page
-                        if time.time() >= next_live:
+                        t0 = time.time()
+                        if now >= next_live or pushed:
+                            self.push_at = 0.0        # cleared first: messages during refresh() queue the next one
                             self.live_tracker.refresh()
                             next_live = time.time() + tick
                         snap = self.live_tracker.snapshot(self.season)
+                        last_build = time.time()
+                        self.build_ms = round((last_build - t0) * 1000)
                         snap.update(refresh_seconds=tick, mode="live",
-                                    feed={"stream": self.stream.status() if self.stream else None, "view": sorted(self.view) if self.view else None})
+                                    feed={"stream": self.stream.status() if self.stream else None,
+                                          "view": sorted(self.view) if self.view else None,
+                                          "build_ms": self.build_ms, "push": self.event_streams > 0})
                         packed = zlib.compress(json.dumps(snap).encode(), 3)   # ~6x smaller; 1 frame/s adds up
                         with self.lock:
-                            self.history.append((time.time(), snap.get("data_time") or time.time(), packed))
+                            frame = (last_build, snap.get("data_time") or last_build, packed)
+                            if self.history and last_build - self._hist_at < HISTORY_STEP:
+                                self.history[-1] = frame       # several frames a second: keep the newest
+                            else:
+                                self.history.append(frame)
+                                self._hist_at = last_build
                             while self.history and time.time() - self.history[0][0] > HISTORY_SECONDS:
                                 self.history.popleft()
                             self.live = snap
-                    wait = max(0.1, next_live - time.time())
+                        self._new_frame()
+                    wake_at = next_live
+                    if self.push_at and self.live_tracker.streaming():
+                        wake_at = min(wake_at, max(self.push_at + PUSH_DEBOUNCE, last_build + PUSH_MIN_GAP))
+                    wait = max(0.02, wake_at - time.time())
             except api.LiveSessionLock as e:
                 with self.lock:
                     self.live = {"error": str(e)}
@@ -511,6 +561,7 @@ class Feed:
             "name": f"{tr.meeting.get('meeting_name', '')} - {s['session_name']} {s.get('year', '')}"})
         with self.lock:
             self.live = snap
+        self._new_frame()
 
     # ----------------------------------------------------------------- reads (HTTP threads)
     def current(self):
@@ -714,6 +765,8 @@ def serve(season, session_key="latest", interval=10, port=8765, open_browser=Tru
                     self._send(PAGE.read_text(), "text/html; charset=utf-8")
                 elif path == "/api/live":
                     self._json(feed.current())
+                elif path == "/api/events":
+                    self._events()
                 elif path == "/api/focus":
                     num = q.get("driver", "")
                     if num and not (num.isdigit() and 1 <= int(num) <= 99):
@@ -776,6 +829,41 @@ def serve(season, session_key="latest", interval=10, port=8765, open_browser=Tru
 
         def log_message(self, *args):
             pass
+
+        def _events(self):
+            """Server-Sent Events: each new frame as soon as it's built (several a second while streaming), and
+            at least one a second otherwise, since a delayed or replay view moves on even without new data."""
+            with feed.frame_cv:
+                if feed.event_streams >= MAX_EVENT_STREAMS:
+                    return self._json({"error": "too many live connections - polling instead"}, 503)
+                feed.event_streams += 1
+            try:
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("Connection", "close")
+                self.end_headers()
+                seen = -1
+                self.wfile.write(b"retry: 2000\n\n")
+                sent = 0.0
+                while True:
+                    seen = feed.wait_frame(seen, 1.0)
+                    st = feed.settings
+                    if st["mode"] != "live" or st["delay"]:
+                        # delayed / replay views step about once a second: don't resend the same picture
+                        gap = 0.9 - (time.time() - sent)
+                        if gap > 0:
+                            time.sleep(gap)
+                    sent = time.time()
+                    data = json.dumps(feed.current(), separators=(",", ":"))
+                    self.wfile.write(b"data: " + data.encode() + b"\n\n")
+                    self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                pass            # page closed or reloaded
+            finally:
+                with feed.frame_cv:
+                    feed.event_streams -= 1
 
         def _radio(self, path, q):
             """Team radio downloads. F1 hosts the clips on another site, so the browser can't save them

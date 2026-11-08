@@ -4,6 +4,7 @@ A tiny dependency-free MQTT 3.1.1 subscriber (QoS 0). Messages are buffered per 
 drained by the LiveTracker each tick, so data arrives within a second or two instead of
 waiting for the next REST poll - and none of it counts towards the 60 requests/minute limit.
 """
+import gzip
 import json
 import os
 import socket
@@ -11,7 +12,8 @@ import ssl
 import struct
 import threading
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
+from datetime import datetime
 
 from . import api
 
@@ -20,6 +22,7 @@ KEEPALIVE = 30
 TOPICS = ("position", "intervals", "race_control", "laps", "location", "car_data",
           "weather", "overtakes", "team_radio", "pit", "stints")
 MAX_BUFFER = 20000          # per topic, so a stalled consumer can't eat all the memory
+RECORD_EVERY = 5.0          # seconds between flushes of the raw-message recording
 
 
 def _varint(n):
@@ -47,6 +50,9 @@ class Stream:
         self.received = 0
         self._stop = False
         self._sock = None
+        self.on_message = None      # callback(topic) on the network thread - the feed uses it to rebuild at once
+        self._lag = defaultdict(lambda: deque(maxlen=200))   # topic -> seconds from event (row "date") to arrival
+        self._rec, self._rec_at = [], time.time()
         if connect:
             threading.Thread(target=self._run, daemon=True, name="openf1-mqtt").start()
 
@@ -63,13 +69,23 @@ class Stream:
             rows = [r for r in rows if r.get("session_key") in (None, session_key)]
         return sorted(rows, key=lambda r: r.get("_id", 0))
 
+    def lag(self):
+        """Median seconds between something happening on track and its message reaching us, per topic."""
+        out = {}
+        for topic, d in list(self._lag.items()):
+            v = sorted(d)
+            if v:
+                out[topic] = round(v[len(v) // 2], 2)
+        return out
+
     def status(self):
         return {"connected": self.connected, "healthy": self.healthy, "received": self.received,
                 "last_msg_age": round(time.time() - self.last_msg, 1) if self.last_msg else None,
-                "error": self.error}
+                "error": self.error, "lag": self.lag()}
 
     def stop(self):
         self._stop = True
+        self._flush_record()
         if self._sock:
             try:
                 self._sock.close()
@@ -116,12 +132,29 @@ class Stream:
             if time.time() - last_ping > KEEPALIVE / 2:
                 sock.sendall(b"\xc0\x00")
                 last_ping = time.time()
+            if time.time() - self._rec_at > RECORD_EVERY:
+                self._flush_record()
             try:
                 ptype, body = self._read(sock)
             except socket.timeout:
                 continue
             if ptype == 3:
                 self._publish(body)
+
+    # ------------------------------------------------------------------ recording
+    def _flush_record(self):
+        """Raw messages with their arrival time, next to the REST recordings (api.RECORD_DIR), so a session's
+        real stream latency and message order can be studied afterwards. Never breaks live timing."""
+        rows, self._rec, self._rec_at = self._rec, [], time.time()
+        if not rows or api.RECORD_DIR is None:
+            return
+        try:
+            folder = api.RECORD_DIR / time.strftime("%Y-%m-%d", time.gmtime())
+            folder.mkdir(parents=True, exist_ok=True)
+            with gzip.open(folder / "stream.jsonl.gz", "at", encoding="utf-8") as f:
+                f.write("".join(json.dumps({"rx": rx, "topic": t, "row": r}) + "\n" for rx, t, r in rows))
+        except OSError:
+            pass
 
     def _publish(self, body):
         n = struct.unpack("!H", body[:2])[0]
@@ -131,6 +164,11 @@ class Stream:
         except ValueError:
             return
         name = topic.split("/", 1)[-1]
+        rx = time.time()
+        if api.RECORD_DIR is not None and isinstance(row, dict):
+            self._rec.append((rx, name, dict(row)))
+        if not isinstance(row, dict):
+            return
         for k in ("date", "date_start"):     # some topics omit the UTC offset that REST includes
             v = row.get(k)
             if isinstance(v, str) and len(v) > 19 and not (v.endswith("Z") or "+" in v[19:] or "-" in v[19:]):
@@ -143,7 +181,19 @@ class Stream:
             if len(b) > MAX_BUFFER:
                 del b[:len(b) - MAX_BUFFER]
         self.received += 1
-        self.last_msg = time.time()
+        self.last_msg = rx
+        v = row.get("date")
+        if isinstance(v, str):
+            try:
+                self._lag[name].append(rx - datetime.fromisoformat(v).timestamp())
+            except ValueError:
+                pass
+        cb = self.on_message
+        if cb:
+            try:
+                cb(name)
+            except Exception:
+                pass
 
     @staticmethod
     def _recv(sock, n):

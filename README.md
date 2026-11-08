@@ -34,6 +34,8 @@ The poller is tiered to stay inside **60 requests/minute**:
 ### Real-time stream, priorities and no-spoiler mode
 
 - **Real-time stream:** with a paid login, the GUI subscribes to OpenF1's MQTT stream (`mqtt.openf1.org:8883`, using your token as the password; the client is `f1hub/stream.py` and needs no extra packages). Timing and positions arrive within a few seconds and don't count against the 60 requests/minute limit, and the server refreshes every second. The header chip reads **REAL-TIME STREAM**, or **POLLING** when it falls back to REST.
+- **Pushed to the page:** a streamed timing message (positions, intervals, laps, race control, pits...) rebuilds the dashboard within ~0.1 s, at most 4 times a second, and the server pushes each frame to the browser over `/api/events` (Server-Sent Events). If that can't connect (an old browser, or more than 4 dashboard tabs open), the page polls once a second as before. Hover the chip to see OpenF1's own measured delay.
+- **Stream recording:** every MQTT message is saved with its arrival time to `recordings/<date>/stream.jsonl.gz`, alongside the REST recordings, so a session's real latency can be checked afterwards (`F1HUB_RECORD=0` turns both off).
 - **Priority fetching:** each browser tab reports which dashboard tab it's showing. Whatever is on screen in any tab gets fetched most often, and data for hidden tabs slows down (`VIEW_NEEDS` and `CADENCE` in `live.py`). Switching tabs fetches straight away.
 - **Fluid map:** every car comes with its recent position samples, about 4 a second, and the map animates between them. It runs a few seconds behind the timing so there's always a next point to move towards; that buffer adapts to OpenF1's measured latency.
 - **⚙ Settings:**
