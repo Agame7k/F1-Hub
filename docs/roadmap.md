@@ -103,7 +103,10 @@ Explore > Season report in the dashboard (`#explore/report`), built purely on th
   grid-position baseline (Brier score, calibration); title chances after every round.
 - Still to do: the simulator on live timing during a race.
 
-## Phase 7 - Race control and radio
+## Phase 7 - Race control and radio (done)
+
+`python3 -m f1hub stewards 2025`, `radio 2025` and `reliability`, and Explore > Stewards, radio & reliability. See
+[racecontrol.md](racecontrol.md).
 
 - Stewarding consistency: similar incidents, the penalties they got, and the rule behind each.
 - Reliability: DNF causes per team and power unit, using Ergast results back to 1950.

@@ -114,9 +114,24 @@ CREATE TABLE IF NOT EXISTS tel_straight_laps (
     top_speed REAL, top_at REAL, end_speed REAL, clip_drop REAL, clip_dist REAL, plateau REAL, drs REAL,
     PRIMARY KEY (session_key, driver_number, lap_number, straight));
 """
+# stewards' decisions (f1hub/stewarding.py) and team radio (f1hub/radiodata.py): opt-in, added the same way
+EXTRA_SCHEMA = """
+CREATE TABLE IF NOT EXISTS stewards (
+    meeting_key INTEGER, round INTEGER, doc INTEGER, url TEXT PRIMARY KEY, title TEXT, kind TEXT, published TEXT,
+    session TEXT, session_key INTEGER, driver_number INTEGER, competitor TEXT, time TEXT, fact TEXT, infringement TEXT,
+    decision TEXT, reason TEXT, articles TEXT, category TEXT, outcome TEXT, seconds INTEGER, grid INTEGER,
+    points INTEGER, fine INTEGER, blame TEXT, offence TEXT);
+CREATE TABLE IF NOT EXISTS stew_events (meeting_key INTEGER PRIMARY KEY, round INTEGER, compiled_at REAL, final INTEGER);
+CREATE TABLE IF NOT EXISTS radio (
+    session_key INTEGER, driver_number INTEGER, date TEXT, lap_number INTEGER, url TEXT, text TEXT, categories TEXT,
+    PRIMARY KEY (session_key, driver_number, date));
+CREATE TABLE IF NOT EXISTS radio_sessions (session_key INTEGER PRIMARY KEY, clips INTEGER, transcribed INTEGER,
+    compiled_at REAL);
+"""
+EXTRA_TABLES = ("stewards", "stew_events", "radio", "radio_sessions")
 TEL_TABLES = ("tel_sessions", "tel_corners", "tel_laps", "tel_corner_laps", "tel_straights", "tel_straight_laps")
 TABLES = ("sessions", "drivers", "results", "laps", "stints", "pits", "weather", "race_control", "overtakes",
-          "positions", "intervals") + TEL_TABLES
+          "positions", "intervals") + TEL_TABLES + EXTRA_TABLES
 
 
 def default_path(year):
@@ -133,14 +148,14 @@ def connect(path):
     except sqlite3.DatabaseError:
         version = None
     if version and version[0] == str(SCHEMA_VERSION):
-        db.executescript(TEL_SCHEMA)
+        db.executescript(TEL_SCHEMA + EXTRA_SCHEMA)
         return db
     db.close()
     if path.exists():
         log.info("rebuilding %s for schema version %s", path.name, SCHEMA_VERSION)
         path.unlink()
     db = sqlite3.connect(path)
-    db.executescript(SCHEMA + TEL_SCHEMA)
+    db.executescript(SCHEMA + TEL_SCHEMA + EXTRA_SCHEMA)
     db.execute("INSERT INTO meta VALUES ('schema_version', ?)", (str(SCHEMA_VERSION),))
     db.commit()
     return db
@@ -393,7 +408,8 @@ def compile_session(db, session, rnd, year):
     grid, grid_source = _grid(src, rnd, session) if is_race else ({}, None)
 
     for t in TABLES:
-        db.execute(f"DELETE FROM {t} WHERE session_key = ?", (key,))
+        if t not in EXTRA_TABLES:       # stewards' decisions and radio are kept: they're compiled on their own
+            db.execute(f"DELETE FROM {t} WHERE session_key = ?", (key,))
     end = _ts(session.get("date_end")) or 0
     _insert(db, "sessions", [{
         "session_key": key, "year": year, "round": rnd.number, "meeting_key": session.get("meeting_key"),
@@ -446,18 +462,20 @@ def compile_session(db, session, rnd, year):
 
 
 def compile_season(year, kinds=DEFAULT_KINDS, path=None, refresh=False, progress=lambda msg: None, telemetry=(),
-                   rounds=None):
+                   rounds=None, stewards=False, radio=False):
     """Compile every finished session of the given kinds. Returns (path, summary) where summary lists the sessions
     compiled, skipped (already final in the dataset), not run yet, and failed (with the reason), and the sessions
     whose telemetry was measured.
 
     telemetry: kinds of session (telemetry.TEL_KINDS: "quali", "race") to add per-corner telemetry for - slow the
-    first time (minutes a session). rounds: only these round numbers."""
+    first time (minutes a session). rounds: only these round numbers. stewards: add every stewards' decision from
+    fia.com (f1hub/stewarding.py). radio: add the races' team radio, transcribed (f1hub/radiodata.py)."""
     path = Path(path or default_path(year))
     season = Season(year).load(lambda m: progress(f"season: {m}"))
     names = {n for k in kinds for n in KINDS[k]}
     db = connect(path)
-    summary = {"compiled": [], "skipped": [], "pending": [], "failed": [], "telemetry": []}
+    summary = {"compiled": [], "skipped": [], "pending": [], "failed": [], "telemetry": [], "stewards": None,
+               "radio": None}
     try:
         final = {k for (k,) in db.execute("SELECT session_key FROM sessions WHERE final = 1")}
         for rnd in season.rounds:
@@ -488,12 +506,33 @@ def compile_season(year, kinds=DEFAULT_KINDS, path=None, refresh=False, progress
                 summary["compiled"].append((label, n))
         if telemetry:
             _compile_telemetry(db, path, telemetry, rounds, refresh, summary, progress)
+        if stewards:
+            from . import stewarding
+            db.row_factory = sqlite3.Row
+            try:
+                summary["stewards"] = stewarding.compile_season(db, year, rounds, refresh, progress)
+            except fia_errors() as e:
+                summary["failed"].append(("stewards' decisions", str(e).splitlines()[0]))
+            finally:
+                db.row_factory = None
+        if radio:
+            from . import radiodata
+            db.row_factory = sqlite3.Row
+            try:
+                summary["radio"] = radiodata.compile_season(db, rounds, refresh, progress)
+            finally:
+                db.row_factory = None
         db.execute("INSERT OR REPLACE INTO meta VALUES ('year', ?)", (str(year),))
         db.execute("INSERT OR REPLACE INTO meta VALUES ('compiled_at', ?)", (str(time.time()),))
         db.commit()
     finally:
         db.close()
     return path, summary
+
+
+def fia_errors():
+    from .fia import FIAError
+    return (FIAError,)
 
 
 def _compile_telemetry(db, path, kinds, rounds, refresh, summary, progress):

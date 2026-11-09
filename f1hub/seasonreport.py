@@ -49,9 +49,11 @@ def status(year):
         row = db.execute("""SELECT COUNT(*) AS sessions, COUNT(DISTINCT round) AS rounds, MAX(compiled_at) AS at,
                             SUM(final = 0) AS provisional FROM sessions""").fetchone()
         laps = db.execute("SELECT COUNT(*) FROM laps").fetchone()[0]
-        tel = None      # telemetry measured later (from the command line) also makes cached reports stale
-        if db.execute("SELECT 1 FROM sqlite_master WHERE name = 'tel_sessions'").fetchone():
-            tel = db.execute("SELECT MAX(compiled_at) FROM tel_sessions").fetchone()[0]
+        tel = None      # telemetry, stewards' decisions or radio added later (from the command line) also make
+        for table in ("tel_sessions", "stew_events", "radio_sessions"):     # cached reports stale
+            if db.execute("SELECT 1 FROM sqlite_master WHERE name = ?", (table,)).fetchone():
+                at = db.execute(f"SELECT MAX(compiled_at) FROM {table}").fetchone()[0]
+                tel = max(tel or 0, at or 0) or None
     except sqlite3.DatabaseError:
         return {"year": year, "exists": False}
     finally:

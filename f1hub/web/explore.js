@@ -37,10 +37,10 @@ async function xJSON(url) {
 }
 function xErr(e) { return `<div class="empty">${ico("alert")}${esc(e.message || e)}</div>`; }
 function xShow(view) {
-  if (!["analysis", "lab", "stats", "report", "corners", "cars", "strategy", "circuit", "ff1"].includes(view)) view = "analysis";
+  if (!["analysis", "lab", "stats", "report", "corners", "cars", "strategy", "stewards", "circuit", "ff1"].includes(view)) view = "analysis";
   XP.view = view; store.set("xview", view);
   document.querySelectorAll("#xnav button").forEach(b => b.classList.toggle("on", b.dataset.x === view));
-  ["analysis", "lab", "stats", "report", "corners", "cars", "strategy", "circuit", "ff1"].forEach(v => $("x-" + v).classList.toggle("hidden", v !== view));
+  ["analysis", "lab", "stats", "report", "corners", "cars", "strategy", "stewards", "circuit", "ff1"].forEach(v => $("x-" + v).classList.toggle("hidden", v !== view));
   $("xsess").classList.toggle("hidden", !(view === "analysis" || view === "lab"));
   xFF1Status();
   if (view === "analysis" || view === "lab") xLoadSessions();
@@ -49,6 +49,7 @@ function xShow(view) {
   if (view === "corners") cnLoad();
   if (view === "cars") caLoad();
   if (view === "strategy") sgLoad();
+  if (view === "stewards") swLoad();
   if (view === "circuit") xCircuit();
   if (view === "ff1") xFF1();
 }

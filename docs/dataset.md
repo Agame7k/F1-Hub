@@ -10,6 +10,7 @@ python3 -m f1hub compile 2025 --csv out/2025    # also every table as CSV
 python3 -m f1hub compile 2025 --refresh         # compile again sessions already in the file
 python3 -m f1hub compile 2025 --out my.sqlite   # somewhere else
 python3 -m f1hub compile 2025 --telemetry       # also measure every corner from car telemetry (telemetry.md)
+python3 -m f1hub compile 2025 --stewards --radio   # also stewards' decisions and team radio (racecontrol.md)
 python3 -m f1hub compile 2025 --round 20-24     # only these rounds
 ```
 
@@ -122,6 +123,10 @@ seconds is not counted.
 Per-corner telemetry, added with `compile --telemetry`: the corners of each circuit and every corner of every lap
 measured (braking point, minimum speed, throttle, time through it), plus top speed and lift-and-coast per lap.
 See [telemetry.md](telemetry.md).
+
+### stewards, stew_events, radio, radio_sessions
+Stewards' decisions and team radio, added with `compile --stewards` and `compile --radio`, and kept when
+sessions are compiled again. See [racecontrol.md](racecontrol.md).
 
 ### positions, intervals
 Races and sprints, the raw time series: every position change, and the gaps about every four seconds

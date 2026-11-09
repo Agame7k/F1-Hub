@@ -87,6 +87,12 @@ measured pit loss, Safety Car chances and overtaking: the best strategies for ev
 against the alternatives at the time, win and podium chances before each race scored against what happened, and
 title chances after every round ([docs/strategy.md](docs/strategy.md)).
 
+`python3 -m f1hub compile 2025 --stewards --radio` adds every stewards' decision (read from the FIA's documents)
+and the season's team radio (transcribed on this machine). `python3 -m f1hub stewards 2025`, `radio 2025` and
+`reliability`, and Explore > Stewards, radio & reliability, show what each offence got and decisions worded alike
+that ended differently, radio calls checked against the timing data, and why cars have retired since 1950 by
+team, decade and power unit ([docs/racecontrol.md](docs/racecontrol.md)).
+
 ## Command line
 
 ```bash
@@ -104,6 +110,10 @@ python3 -m f1hub compile 2025 --telemetry   # ... with every corner measured fro
 python3 -m f1hub cars 2025               # car characteristics and circuit groups (after --telemetry)
 python3 -m f1hub model 2025              # lap-time model: corrected pace, degradation (--round N for one race)
 python3 -m f1hub strategy 2025           # strategies, graded pit calls, predictions, title odds (--round N, --grade)
+python3 -m f1hub compile 2025 --stewards --radio   # ... with stewards' decisions and transcribed team radio
+python3 -m f1hub stewards 2025           # stewarding consistency: outcomes by offence, similar decisions
+python3 -m f1hub radio 2025              # team radio by topic, checked against the data
+python3 -m f1hub reliability             # retirements since 1950 by team, decade, power unit (--fetch first)
 python3 -m f1hub live                    # live timing in the terminal (paid OpenF1 login)
 python3 -m f1hub gui                     # browser dashboard
 python3 -m f1hub doctor                  # check the setup: logins, stream, FastF1, tools, disk, recent errors

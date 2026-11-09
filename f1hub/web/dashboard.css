@@ -1050,3 +1050,15 @@
   #x-report td .ico { width: 13px; height: 13px; vertical-align: -2px; }
   .sgtyre { display: inline-block; min-width: 16px; height: 16px; line-height: 12px; border: 2px solid; border-radius: 50%; font-size: 9px; font-weight: 700; text-align: center; margin-right: 2px; color: var(--text); }
   .sgwarn { color: var(--amber); }
+  .swstack { display: flex; gap: 2px; height: 12px; }
+  .swstack i { display: block; height: 100%; border-radius: 2px; }
+  .swpair { display: grid; grid-template-columns: 44px 1fr 1fr; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); align-items: start; }
+  .swpair:last-child { border-bottom: 0; }
+  .swsim { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 12px; padding-top: 2px; }
+  .swdec .swout { margin: 3px 0; font-weight: 600; }
+  .swclip { padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+  .swclip:last-child { border-bottom: 0; }
+  .swci { position: relative; height: 12px; background: var(--panel2); border-radius: 3px; }
+  .swci i { position: absolute; top: 3px; height: 6px; background: #3987e5; opacity: .45; border-radius: 3px; }
+  .swci b { position: absolute; top: 0; width: 3px; height: 12px; margin-left: -1px; background: #3987e5; border-radius: 1px; }
+  @media (max-width: 700px) { .swpair { grid-template-columns: 1fr; } }

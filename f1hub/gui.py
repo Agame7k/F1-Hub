@@ -967,6 +967,7 @@ class App:
         self.upstream_errors = {}
         self.compile_job = {"year": None, "running": False, "msg": "", "error": None, "summary": None, "at": 0}
         self.compile_lock = threading.Lock()
+        self.history_job = {"running": False, "msg": "", "error": None, "at": 0}
 
     def upstream_problem(self, path, e):
         """A request that failed because a data source did: logged once per path and message, not per request."""
@@ -1162,10 +1163,12 @@ class App:
                 return self.dataset_status(q)
             j.update(year=year, running=True, msg="starting", error=None, summary=None, at=time.time())
         tel = {"quali": ("quali",), "race": ("race",), "all": ("quali", "race")}.get(q.get("telemetry"), ())
+        stewards, radio = q.get("stewards") == "1", q.get("radio") == "1"
 
         def run():
             try:
-                _, summary = dataset.compile_season(year, progress=lambda m: j.update(msg=m), telemetry=tel)
+                _, summary = dataset.compile_season(year, progress=lambda m: j.update(msg=m), telemetry=tel,
+                                                    stewards=stewards, radio=radio)
                 j.update(summary=summary, msg="done")
             except api.LiveSessionLock:
                 j.update(error="A live session is running, so OpenF1 has locked free access until it ends.")
@@ -1239,6 +1242,44 @@ class App:
         if grade or not hit or hit[0] < (st.get("compiled_at") or 0):
             hit = self.explore_cache[key] = (time.time(), strategyreport.report(year, rnd, upto, grade=grade))
         return dict(hit[1], spoiler_hidden=upto is not None)
+
+    def officials(self, q):
+        """Stewarding consistency, team radio against the data, and reliability since 1950. Spoiler mode as corners."""
+        from . import controlreport, seasonreport
+        year = self._report_year(q)
+        hide = self.feed.hidden_meeting()
+        upto = seasonreport.round_before(year, hide) if hide else None
+        key = ("report", year, upto, "officials", len(self._history_have()))
+        hit = self.explore_cache.get(key)
+        st = seasonreport.status(year)
+        if not hit or hit[0] < (st.get("compiled_at") or 0):
+            hit = self.explore_cache[key] = (time.time(), controlreport.report(year, upto))
+        return dict(hit[1], spoiler_hidden=upto is not None, job=self._job(year), history_job=dict(self.history_job))
+
+    def _history_have(self):
+        from . import history
+        return history.have()
+
+    def history_fetch(self, q):
+        """Download every season's results since 1950 in the background (about an hour the first time, kept)."""
+        from . import history
+        j = self.history_job
+        with self.compile_lock:
+            if j["running"]:
+                return dict(j)
+            j.update(running=True, msg="starting", error=None, at=time.time())
+
+        def run():
+            try:
+                history.fetch_all(progress=lambda m: j.update(msg=m))
+                j.update(msg="done")
+            except Exception as e:
+                log.exception("downloading race history failed")
+                j.update(error=f"{type(e).__name__}: {e}")
+            finally:
+                j.update(running=False, at=time.time())
+        threading.Thread(target=run, name="history", daemon=True).start()
+        return dict(j)
 
     # ---------------------------------------------------------------- home and season
     def home(self, q):
@@ -1344,6 +1385,7 @@ ROUTES = {
     "/api/corners": App.corners,
     "/api/cars": App.cars,
     "/api/strategy": App.strategy,
+    "/api/officials": App.officials, "/api/history/fetch": App.history_fetch,
     "/api/ff1/status": App.ff1_status, "/api/ff1/login": App.ff1_login,
     "/api/ff1/recordings": App.ff1_recordings, "/api/ff1/record": App.ff1_record,
     "/api/recordings": App.recordings, "/api/recordings/latency": App.latency,

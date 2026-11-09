@@ -148,13 +148,18 @@ def cmd_compile(args):
     t0 = datetime.now()
     tel = {"quali": ("quali",), "race": ("race",), "all": ("quali", "race")}.get(args.telemetry, ())
     rounds = _rounds(args.round) if args.round else None
-    path, summary = dataset.compile_season(year, kinds, args.out, args.refresh, progress, telemetry=tel, rounds=rounds)
+    path, summary = dataset.compile_season(year, kinds, args.out, args.refresh, progress, telemetry=tel, rounds=rounds,
+                                           stewards=args.stewards, radio=args.radio)
     print(" " * 70, end="\r", file=sys.stderr)
     laps = sum(n for _, n in summary["compiled"])
     print(c(f"\n  {year} season dataset", "E10600", bold=True) + dim(f"  {path}"))
     print(f"  {len(summary['compiled'])} sessions compiled ({laps} laps) in "
           f"{(datetime.now() - t0).total_seconds():.0f}s, {len(summary['skipped'])} already up to date, "
           f"{len(summary['pending'])} not run yet")
+    if summary["stewards"]:
+        print(f"  Stewards' decisions: {summary['stewards'][1]} from {summary['stewards'][0]} Grands Prix")
+    if summary["radio"]:
+        print(f"  Team radio: {summary['radio'][1]} clips from {summary['radio'][0]} races, {summary['radio'][2]} transcribed")
     if summary["telemetry"]:
         print(f"  Telemetry measured for {len(summary['telemetry'])} sessions "
               f"({sum(n for _, n in summary['telemetry'])} laps)")
@@ -346,6 +351,107 @@ def cmd_strategy(args):
     return 0
 
 
+def cmd_stewards(args):
+    """Stewards' decisions by offence and outcome, similar decisions that ended differently, drivers."""
+    from . import controlreport
+    year = args.season or args.year
+    r = controlreport.stewards(year)
+    if not r.get("exists") or not r.get("decisions"):
+        print(c(f"No stewards' decisions for {year}: python3 -m f1hub compile {year} --stewards", "FFB000"), file=sys.stderr)
+        return 1
+    lab = r["outcome_labels"]
+    print(c(f"\n  {year} stewards' decisions", "E10600", bold=True) + dim(f"  {r['decisions']} decisions from {r['events']} Grands Prix"))
+    print(dim(f"    {'':<44}{'n':>4}{'same':>7}  outcomes"))
+    for x in r["categories"]:
+        mix = ", ".join(f"{v} {lab.get(o, o).lower()}" for o, v in sorted(x["outcomes"].items(), key=lambda kv: -kv[1]))
+        print(f"    {x['label'][:43]:<44}{x['n']:>4}{100 * x['consistency']:>6.0f}%  " + dim(mix))
+    if r["pairs"]:
+        print(c("\n  Similar decisions, different outcomes", "FFFFFF", bold=True) + dim("  worded alike, same offence: worth a closer look"))
+        for p in r["pairs"][:8]:
+            a, b = p["a"], p["b"]
+            o = lambda x: lab.get(x["outcome"], x["outcome"]).lower() + (f" {x['seconds']} s" if x["seconds"] else "")
+            print(f"    {p['similarity']:.2f}  R{a['round']} {a['code'] or a['driver_number']} {o(a)}  v  R{b['round']} {b['code'] or b['driver_number']} {o(b)}"
+                  + dim(f"   {(a['fact'] or '')[:60]}"))
+    print(c("\n  Most penalised drivers", "FFFFFF", bold=True) + dim("  penalties, seconds, grid places, penalty points"))
+    for d in r["drivers"][:10]:
+        print(f"    {d['code'] or d['number']:<5}{d['penalties']:>4}{d['seconds']:>6} s{d['grid']:>5}{d['points']:>5}")
+    return 0
+
+
+def cmd_radio(args):
+    """Team radio sorted by topic and set against the timing data."""
+    from . import controlreport
+    year = args.season or args.year
+    r = controlreport.radio(year)
+    if not r.get("exists") or not r.get("clips"):
+        print(c(f"No team radio for {year}: python3 -m f1hub compile {year} --radio", "FFB000"), file=sys.stderr)
+        return 1
+    print(c(f"\n  {year} team radio", "E10600", bold=True) + dim(f"  {r['clips']} clips from {r['races']} races, {r['transcribed']} transcribed"))
+    for k, v in sorted(r["categories"].items(), key=lambda kv: -kv[1]):
+        print(f"    {r['labels'][k]:<20}{v:>5}")
+    pm = lambda e: "-" if not e else f"{e['est']:+.2f} s" + (f" ± {1.96 * e['se']:.2f}" if e.get("se") else "")
+    t = r["tyres"]
+    print(c("\n  Against the data", "FFFFFF", bold=True))
+    print(f"    tyre complaints  {len(t['calls'])}: pace in the 3 laps before {pm(t['excess'])} a lap against early in the stint"
+          + dim(f" (any lap at that tyre age: {pm(t['control'])})"))
+    if t["with_stop"]:
+        print(f"                     a stop within 3 laps in {t['stopped_within_3']} of {t['with_stop']}, a median {t['laps_to_stop']} laps later")
+    if r["box"]["n"]:
+        print(f"    box calls        {r['box']['n']}: a stop from the lap before to 2 laps after in {r['box']['followed']}")
+    if r["team_orders"]["calls"]:
+        print(f"    team orders      {len(r['team_orders']['calls'])}: team-mates swapped within 3 laps {r['team_orders']['swapped']} of {r['team_orders']['known']}")
+    if r["saving"]["after_minus_before"]:
+        print(f"    saving           pace after the call {pm(r['saving']['after_minus_before'])} a lap against before")
+    if r["car"]["n"]:
+        print(f"    car problems     {r['car']['n']}: the car retired in {r['car']['retired']} (all starts: {100 * (r['car']['base_dnf'] or 0):.0f}%)")
+    return 0
+
+
+def cmd_reliability(args):
+    """Why cars didn't finish, season by season, per team and per power unit."""
+    from . import history, reliability
+    if args.fetch:
+        say = lambda m: print(dim(f"  {m}...".ljust(60)), end="\r", file=sys.stderr, flush=True)
+        history.fetch_all(progress=say)
+        print(" " * 60, end="\r", file=sys.stderr)
+    r = reliability.report(first=args.since)
+    if not r.get("by_year"):
+        print(c("No race results downloaded yet: python3 -m f1hub reliability --fetch (about an hour the first time)", "FFB000"), file=sys.stderr)
+        return 1
+    pct = lambda v: "   -" if v is None else f"{100 * v:4.0f}%"
+    print(c(f"\n  Reliability {r['years'][0]}-{r['years'][1]}", "E10600", bold=True) + dim("  share of starts: finished, mechanical, accident"))
+    for d in r["decades"]:
+        ys = [y for y in r["by_year"] if d["decade"] <= y["year"] < d["decade"] + 10]
+        n = sum(y["starts"] for y in ys)
+        f = sum(y["finished"] * y["starts"] for y in ys) / n
+        m = sum(y["mechanical"] * y["starts"] for y in ys) / n
+        a = sum(y["incident"] * y["starts"] for y in ys) / n
+        top = sorted(d["causes"].items(), key=lambda kv: -kv[1])[:3]
+        print(f"    {d['decade']}s  {pct(f)}{pct(m)}{pct(a)}   " + dim(", ".join(f"{r['labels'][k].lower()} {v}" for k, v in top)))
+    print(c(f"\n  Teams {r['window'][0]}-{r['window'][1]}", "FFFFFF", bold=True) + dim("  mechanical retirements per start, 95% interval"))
+    few = [t for t in r["teams"] if t["starts"] < 20]
+    for t in r["teams"]:
+        if t["starts"] < 20:
+            continue
+        m = t["mechanical"]
+        print(f"    {t['name'][:22]:<22}{t['starts']:>5}{pct(m['est'])}  " + dim(f"{100 * m['lo']:.1f}-{100 * m['hi']:.1f}%"))
+    if few:
+        print(dim(f"    {len(few)} teams with fewer than 20 starts not shown"))
+    if r["power_units"]:
+        years = sorted({p["year"] for p in r["power_units"]})
+        print(c("\n  Power units", "FFFFFF", bold=True) + dim("  engine, ERS, fuel or electrical failures per start (* no causes published)"))
+        print(dim("    " + " " * 12 + "".join(f"{str(y)[2:]:>6}" for y in years)))
+        for mk in sorted({p["maker"] for p in r["power_units"]}):
+            cells = []
+            for y in years:
+                p = next((x for x in r["power_units"] if x["maker"] == mk and x["year"] == y), None)
+                cells.append("" if not p else f"{100 * p['pu']['est']:.0f}%" if p["causes_published"] else f"{100 * p['mechanical']['est']:.0f}%*")
+            print(f"    {mk:<12}" + "".join(f"{x:>6}" for x in cells))
+    if r["unmapped"]:
+        print(dim(f"  teams with no power-unit maker on record: {r['unmapped']}"))
+    return 0
+
+
 def _rounds(spec):
     """'24', '20-24' or '1,5,9' -> a set of round numbers."""
     out = set()
@@ -440,12 +546,23 @@ def main(argv=None):
     co.add_argument("--telemetry", nargs="?", const="quali", choices=("quali", "race", "all"),
                     help="also measure every corner from car telemetry (qualifying by default; minutes a session)")
     co.add_argument("--round", metavar="N", help="only these rounds: 24, 20-24 or 1,5,9")
+    co.add_argument("--stewards", action="store_true",
+                    help="also read every stewards' decision from fia.com (a few PDFs a minute; kept)")
+    co.add_argument("--radio", action="store_true",
+                    help="also add the races' team radio, transcribed with Whisper (an hour or more a season; kept)")
     ca = sub.add_parser("cars", help="car characteristics and circuit groups (from compile --telemetry)")
     ca.add_argument("season", nargs="?", type=int, help="the year (default: --year)")
     sg = sub.add_parser("strategy", help="strategy simulation, pit-call grading and race predictions")
     sg.add_argument("season", nargs="?", type=int, help="the year (default: --year)")
     sg.add_argument("--round", type=int, help="one race in detail: best strategies, prediction, pit calls")
     sg.add_argument("--grade", action="store_true", help="grade the pit calls of every race (about 10 s a race, kept)")
+    sw = sub.add_parser("stewards", help="stewarding consistency (after compile --stewards)")
+    sw.add_argument("season", nargs="?", type=int, help="the year (default: --year)")
+    rd = sub.add_parser("radio", help="team radio against the data (after compile --radio)")
+    rd.add_argument("season", nargs="?", type=int, help="the year (default: --year)")
+    rl = sub.add_parser("reliability", help="why cars didn't finish, 1950 to now")
+    rl.add_argument("--fetch", action="store_true", help="download the seasons not kept yet (about an hour the first time)")
+    rl.add_argument("--since", type=int, help="the team table from this season (default: the last 12)")
     mo = sub.add_parser("model", help="the lap-time model for a compiled season")
     mo.add_argument("season", nargs="?", type=int, help="the year (default: --year)")
     mo.add_argument("--round", type=int, help="one race in detail, with every driver's corrected pace")
@@ -492,6 +609,12 @@ def main(argv=None):
             return cmd_cars(args)
         if args.cmd == "strategy":
             return cmd_strategy(args)
+        if args.cmd == "stewards":
+            return cmd_stewards(args)
+        if args.cmd == "radio":
+            return cmd_radio(args)
+        if args.cmd == "reliability":
+            return cmd_reliability(args)
         season = load_season(args.year)
         if not args.cmd:
             menu(season)
