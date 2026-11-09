@@ -9,6 +9,7 @@
     python3 -m f1hub h2h
     python3 -m f1hub export results.json
     python3 -m f1hub compile 2025         the whole season as one SQLite dataset (add --csv DIR for CSV files)
+    python3 -m f1hub model 2025           the lap-time model: corrected race pace, degradation, fuel, dirty air
     python3 -m f1hub live                 live timing for the session running now (paid OpenF1 login)
     python3 -m f1hub gui                  live dashboard in your browser (http://localhost:8765)
     python3 -m f1hub doctor               check the setup and say what to fix
@@ -170,6 +171,62 @@ def cmd_compile(args):
     return 1 if summary["failed"] and not summary["compiled"] and not summary["skipped"] else 0
 
 
+def _pm(e, n=3, unit=""):
+    if not e or e.get("est") is None:
+        return "-"
+    return f"{e['est']:+.{n}f}{unit}" + (f" ± {1.96 * e['se']:.{n}f}" if e.get("se") else " (fixed)")
+
+
+def cmd_model(args):
+    """The lap-time model for a compiled season: per race, then across the season (95% intervals)."""
+    from . import seasonreport
+    year = args.season or args.year
+    if not seasonreport.status(year).get("exists"):
+        print(c(f"The {year} season isn't compiled yet: python3 -m f1hub compile {year}", "FFB000"), file=sys.stderr)
+        return 1
+    m = seasonreport.report(year)["model"]
+    races = [f for f in m["races"] if args.round in (None, f["round"])]
+    if not races:
+        print(c(f"No race {args.round} in the {year} dataset.", "FFB000"), file=sys.stderr)
+        return 1
+    print(c(f"\n  {year} lap-time model", "E10600", bold=True) + dim("  per lap, seconds · ± is a 95% interval"))
+    for f in races:
+        print(c(f"\n  R{f['round']} {f['circuit']}", "FFFFFF", bold=True), end="")
+        if "skipped" in f:
+            print(dim(f"  not modelled: {f['skipped']}"))
+            continue
+        print(dim(f"  {f['laps']} clean dry laps · fit within ±{f['sigma']:.2f}s a lap · R² {f['r2']:.2f}"))
+        print(f"    fuel + track    {_pm(f['fuel'], 3)} s per lap")
+        print(f"    dirty air       {_pm(f['traffic'], 2)} s a lap within {m['settings']['traffic']}s of the car ahead")
+        for cp in f["compounds"]:
+            cliff = cp.get("cliff")
+            extra = f"  cliff after {cliff['age']} laps: +{cliff['extra']:.3f} s/lap more" if cliff else ""
+            print(f"    {cp['compound'].lower():<15} {_pm(cp['deg'], 3)} s per lap of age"
+                  f"   {'reference' if cp['reference'] else 'offset ' + (_pm(cp['offset'], 2) if cp['offset'] else '-')}"
+                  f"{dim(extra)}")
+        if args.round is not None:
+            print(dim("    corrected race pace, gap to the quickest:"))
+            for d in f["drivers"]:
+                print(f"      {d['code'] or d['number']:<4} {d['gap']:+.3f}" + (f" ± {1.96 * d['se']:.3f}" if d["se"] else "")
+                      + dim(f"  {d['team'] or ''}, {d['laps']} laps"))
+    if args.round is None:
+        print(c("\n  Across the season", "FFFFFF", bold=True))
+        print(f"    fuel + track    {_pm(m['fuel'], 3)} s per lap")
+        print(f"    dirty air       {_pm(m['traffic'], 2)} s a lap")
+        for comp, e in m["deg"].items():
+            print(f"    {comp.lower():<15} {_pm(e, 3)} s per lap of age")
+        print(c("\n  Corrected race pace", "FFFFFF", bold=True) + dim("  average % off the quickest team"))
+        for t in m["pace"]["teams"]:
+            step = t.get("step")
+            note = f"  from R{step['round']}: {step['change']:+.2f}%" if step else ""
+            print(f"    {t['avg']:+6.2f}%  {t['team']}" + dim(f"  ({t['rounds']} races, quickest at {t['best']}){note}"))
+        if m["dirty_teams"]:
+            print(c("\n  Dirty air by team", "FFFFFF", bold=True) + dim("  cost of a lap within the car ahead's wake"))
+            for t in m["dirty_teams"]:
+                print(f"    {t['est']:+.2f}s ± {1.96 * t['se']:.2f}  {t['team']}" + dim(f"  ({t['laps']} laps)"))
+    return 0
+
+
 # --------------------------------------------------------------------------- interactive
 def menu(season):
     while True:
@@ -252,6 +309,9 @@ def main(argv=None):
     co.add_argument("--refresh", action="store_true", help="compile again sessions already in the dataset")
     co.add_argument("--out", help="the SQLite file (default: .f1data/season_YEAR.sqlite)")
     co.add_argument("--csv", metavar="DIR", help="also write every table as a CSV file in DIR")
+    mo = sub.add_parser("model", help="the lap-time model for a compiled season")
+    mo.add_argument("season", nargs="?", type=int, help="the year (default: --year)")
+    mo.add_argument("--round", type=int, help="one race in detail, with every driver's corrected pace")
     dr = sub.add_parser("doctor", help="check the setup and say what to fix")
     dr.add_argument("--port", type=int, default=8765, help="the dashboard's port")
     dr.add_argument("--no-network", action="store_true", help="skip the checks that contact OpenF1")
@@ -289,6 +349,8 @@ def main(argv=None):
             return 0
         if args.cmd == "compile":
             return cmd_compile(args)
+        if args.cmd == "model":
+            return cmd_model(args)
         season = load_season(args.year)
         if not args.cmd:
             menu(season)

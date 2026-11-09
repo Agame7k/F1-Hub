@@ -38,22 +38,25 @@ Explore > Season report in the dashboard (`#explore/report`), built purely on th
 - Pit stops: pit-lane loss per circuit, stationary times per team (mean, spread, slow-stop rate).
 - Safety Car, VSC and red flag frequency per circuit, and on which laps.
 - Overtakes per race and per circuit, and who made and lost the most positions on track.
-- Weather: track temperature range and rain at every race (how it correlates with pace and degradation needs the
-  lap-time model, phase 3).
-- Race and qualifying pace for every team, round by round, as % off the quickest (not yet fuel or traffic corrected).
+- Weather: track temperature range and rain at every race (its link with degradation is in phase 3).
+- Race and qualifying pace for every team, round by round, as % off the quickest (corrected race pace is phase 3).
 
-## Phase 3 - Lap-time model
+## Phase 3 - Lap-time model (done)
 
-One model per race that separates what makes up a lap time:
+`python3 -m f1hub model 2025`, and the Lap-time model section of the Season report. See [model.md](model.md).
 
-    lap time = car/driver pace + fuel burned + compound x tyre age + track temperature
-               + traffic (time spent within ~1.5 s of the car ahead) + noise
+    lap time = driver pace + fuel x lap number + compound offset + compound x tyre age
+               + dirty air (lap ending within 1.5 s of the car ahead) + noise
 
-- Fuel effect fitted per race instead of the fixed 0.06 s/lap estimate.
-- Degradation per compound with confidence intervals; tyre "cliff" detection with change-point analysis.
-- Fuel- and traffic-corrected race pace ranking for every race, and across the season: each car's pace
-  relative to the field round by round, so upgrade packages show up as steps.
-- The cost of dirty air per car and per circuit.
+- Fitted per race by least squares, with stint-clustered standard errors. Every figure has a 95% interval.
+- Fuel effect fitted per race instead of a fixed estimate. It is fuel burn and track evolution together, about
+  -0.05 s per lap in 2025. Fixed at the season figure where nobody stopped.
+- Degradation per compound with intervals; tyre cliffs by change-point search; tyre curves per race.
+- Fuel- and traffic-corrected race pace for every driver at every race, and for every team across the season,
+  with the round of any clear step in pace (upgrades).
+- The cost of dirty air per circuit and per team.
+- Track temperature is not a term: within a race it moves with the lap number, so it can't be separated from
+  fuel. Its link with degradation is shown across races instead.
 
 ## Phase 4 - Circuit model and per-corner telemetry
 

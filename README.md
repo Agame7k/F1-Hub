@@ -71,6 +71,10 @@ weather, race control, overtakes and the raw position and gap series. Query it w
 CSV. [docs/dataset.md](docs/dataset.md) lists the tables; [docs/roadmap.md](docs/roadmap.md) is the analysis
 built on it, phase by phase.
 
+`python3 -m f1hub model 2025` fits a lap-time model to every race in it: race pace corrected for fuel, tyres and
+dirty air, tyre degradation per compound, tyre cliffs and the cost of following another car, each with a 95%
+interval. [docs/model.md](docs/model.md) explains the model and its limits.
+
 ## Command line
 
 ```bash
@@ -84,6 +88,7 @@ python3 -m f1hub braking monza VER NOR   # braking telemetry on each driver's fa
 python3 -m f1hub h2h                     # teammate qualifying/race head-to-heads
 python3 -m f1hub export season.json      # everything as JSON
 python3 -m f1hub compile 2025            # the whole season as one SQLite dataset (--csv DIR for CSV)
+python3 -m f1hub model 2025              # lap-time model: corrected pace, degradation (--round N for one race)
 python3 -m f1hub live                    # live timing in the terminal (paid OpenF1 login)
 python3 -m f1hub gui                     # browser dashboard
 python3 -m f1hub doctor                  # check the setup: logins, stream, FastF1, tools, disk, recent errors

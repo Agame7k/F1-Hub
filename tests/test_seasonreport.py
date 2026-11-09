@@ -54,6 +54,13 @@ class SeasonReport(unittest.TestCase):
         self.assertEqual(self.r["race_pace"]["teams"], [])
         self.assertEqual(self.r["quali_pace"]["teams"], [])
 
+    def test_model_on_too_few_laps(self):
+        """The lap-time model is in the report; one short race isn't enough to fit, and says why."""
+        m = self.r["model"]
+        self.assertEqual(len(m["races"]), 1)
+        self.assertIn("skipped", m["races"][0])
+        self.assertEqual((m["pace"]["teams"], m["fuel"], m["cliffs"]), ([], None, []))
+
     def test_spoiler_cut(self):
         self.assertEqual(seasonreport.round_before(2025, 1254), 0)
         self.assertIsNone(seasonreport.round_before(2025, 9999))

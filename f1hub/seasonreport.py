@@ -1,12 +1,13 @@
 """Season report: season-wide numbers from a compiled season dataset (f1hub/dataset.py).
 
-Everything here is descriptive - counted or measured straight from the dataset. Pace is the median clean lap,
-not yet corrected for fuel or traffic (that is the lap-time model, phase 3 on docs/roadmap.md).
+Everything here is descriptive - counted or measured straight from the dataset - except `model`: the lap-time
+model (f1hub/lapmodel.py), which corrects race pace for fuel, tyres, temperature and traffic and measures
+degradation, each with its uncertainty. The plain race pace is the median clean lap, uncorrected.
 """
 import sqlite3
 from statistics import median, pstdev
 
-from . import dataset
+from . import dataset, lapmodel
 from .racecontrol import neutralisation_counts
 
 MIN_CLEAN_LAPS = 10       # a driver needs this many clean dry laps in a race for a race-pace figure
@@ -335,6 +336,12 @@ def weather(db, upto):
     return out
 
 
+def model(db, upto, teams):
+    """The lap-time model for every race, and the season-wide picture it gives (f1hub/lapmodel.py)."""
+    info = {k: (teams.code.get(k), team, teams.colour.get(team)) for k, team in teams.of.items()}
+    return lapmodel.season(db, _sessions(db, upto, ("Race",)), info, teams, _pct_series)
+
+
 def headline(db, upto):
     one = lambda sql, *a: db.execute(sql, (upto, *a)).fetchone()[0]
     return {
@@ -369,6 +376,6 @@ def report(year, upto=None):
                 "race_pace": race_pace(db, upto, teams), "quali_pace": quali_pace(db, upto, teams),
                 "teammates": teammates(db, upto, teams), "racecraft": racecraft(db, upto, teams),
                 "tyres": tyres(db, upto, teams), "pits": pit_stops(db, upto, teams), "neutral": neutral,
-                "weather": weather(db, upto)}
+                "weather": weather(db, upto), "model": model(db, upto, teams)}
     finally:
         db.close()

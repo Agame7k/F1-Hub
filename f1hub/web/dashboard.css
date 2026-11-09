@@ -1035,6 +1035,13 @@
   .sraxis { position: relative; height: 14px; min-width: 160px; }
   .sraxis span { position: absolute; transform: translateX(-50%); font-weight: 400; font-size: 11px; }
   .srlist { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; }
+  .srlist.col { flex-direction: column; gap: 6px; }
+  .srlist .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+  .srh { font-size: 13px; font-weight: 600; margin: 16px 0 8px; color: var(--text); }
+  .srh .muted { font-weight: 400; }
+  .srsec { margin: 26px 0 12px; padding-top: 14px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+  .srsec b { display: block; color: var(--text); font-size: 17px; margin-bottom: 3px; }
+  #x-report h2 select { font-size: 13px; }
   #x-report tbody tr.on td { background: #1f2430; }
   #x-report th.click { cursor: pointer; } #x-report th.on { color: var(--text); }
   #x-report td .ico { width: 13px; height: 13px; vertical-align: -2px; }

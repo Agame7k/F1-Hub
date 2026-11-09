@@ -82,6 +82,7 @@ function srRender(year) {
         ${srTrendCard("race", "Race pace", "quicker car's median clean dry lap, % off the best team · not fuel or traffic corrected", r.race_pace)}
         ${srTrendCard("quali", "Qualifying pace", "each team's best lap, % off pole", r.quali_pace)}
       </div>
+      ${lmSection(r)}
       <div class="two" style="margin-top:16px">${srTeammates(r.teammates)}${srPits(r.pits)}</div>
       <div style="margin-top:16px">${srRacecraft(r.racecraft)}</div>
       <div class="two" style="margin-top:16px">${srTyres(r.tyres)}<div class="stack">${srNeutral(r.neutral)}${srWeather(r.weather)}</div></div>
@@ -101,7 +102,8 @@ function srTrendCard(kind, title, sub, d) {
     <tbody>${rows}</tbody></table></div></div>`;
 }
 function srPick(kind, team) {
-  const sel = SR.sel[kind], t = [...SR.data[+$("srYear").value][kind + "_pace"].teams].find(x => x.team.replace(/'/g, "") === team);
+  const r = SR.data[+$("srYear").value], d = kind === "model" ? r.model.pace : r[kind + "_pace"];
+  const sel = SR.sel[kind], t = d.teams.find(x => x.team.replace(/'/g, "") === team);
   if (!t) return;
   sel.has(t.team) ? sel.delete(t.team) : sel.add(t.team);
   srRender(+$("srYear").value);
@@ -120,9 +122,12 @@ function srTrend(kind, d) {
   const order = [...d.teams].sort((a, b) => sel.has(a.team) - sel.has(b.team));      // highlighted lines drawn last, on top
   const lines = order.map(t => { const on = sel.has(t.team), c = on ? vis(t.colour) : "#3a3f4d";
     const pts = t.points.map(p => `${X(p[0]).toFixed(1)},${Y(p[1]).toFixed(1)}`).join(" ");
-    const dots = on ? t.points.map(p => `<circle cx="${X(p[0]).toFixed(1)}" cy="${Y(p[1]).toFixed(1)}" r="4" fill="${esc(c)}" stroke="#16181f" stroke-width="2"/>
-      <circle cx="${X(p[0]).toFixed(1)}" cy="${Y(p[1]).toFixed(1)}" r="10" fill="transparent"><title>${esc(t.team)} · R${p[0]} ${esc(name[p[0]] || "")}: ${p[1] === 0 ? "quickest" : srPct(p[1])}${p[1] > cap ? " (off the scale)" : ""}</title></circle>`).join("") : "";
-    return `<polyline fill="none" stroke="${esc(c)}" stroke-width="${on ? 2 : 1.2}" points="${pts}"/>${dots}`; }).join("");
+    const ci = i => t.se && t.se[i] ? 1.96 * t.se[i] : 0;      // the corrected pace's 95% interval
+    const bars = on && t.se ? t.points.map((p, i) => ci(i) ? `<line x1="${X(p[0]).toFixed(1)}" x2="${X(p[0]).toFixed(1)}" y1="${Y(Math.max(0, p[1] - ci(i))).toFixed(1)}"
+      y2="${Y(p[1] + ci(i)).toFixed(1)}" stroke="${esc(c)}" stroke-width="1.5" opacity=".5"/>` : "").join("") : "";
+    const dots = on ? t.points.map((p, i) => `<circle cx="${X(p[0]).toFixed(1)}" cy="${Y(p[1]).toFixed(1)}" r="4" fill="${esc(c)}" stroke="#16181f" stroke-width="2"/>
+      <circle cx="${X(p[0]).toFixed(1)}" cy="${Y(p[1]).toFixed(1)}" r="10" fill="transparent"><title>${esc(t.team)} · R${p[0]} ${esc(name[p[0]] || "")}: ${p[1] === 0 ? "quickest" : srPct(p[1])}${ci(i) ? ` ± ${ci(i).toFixed(2)}%` : ""}${p[1] > cap ? " (off the scale)" : ""}</title></circle>`).join("") : "";
+    return `<polyline fill="none" stroke="${esc(c)}" stroke-width="${on ? 2 : 1.2}" points="${pts}"/>${bars}${dots}`; }).join("");
   const legend = d.teams.filter(t => sel.has(t.team)).map(t => `<span><i style="background:${esc(vis(t.colour))}"></i>${esc(t.team)}</span>`).join("");
   return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block" role="img" aria-label="${kind} pace by round">${g}${lines}</svg>
     <div class="legend">${legend || `<span class="muted">Click teams in the table to highlight them.</span>`}<span class="muted">top line = quickest that day${all.some(v => v > cap) ? ` · values above +${cap.toFixed(1)}% drawn at the bottom edge` : ""}</span></div>`;
