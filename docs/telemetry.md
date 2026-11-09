@@ -2,7 +2,7 @@
 
 Phase 4 of the [roadmap](roadmap.md). This step reads every car's telemetry through a session (speed,
 throttle, brake, gear, RPM, DRS and position on track). From it, it finds the circuit's corners and measures
-every corner of every lap.
+every corner and straight of every lap. [cars.md](cars.md) builds car characteristics and circuit groups on it.
 
 ```bash
 python3 -m f1hub compile 2025 --telemetry            # qualifying sessions
@@ -51,6 +51,8 @@ time.
 | `tel_sessions` | session measured | reference driver and lap, `length` (m), `outline` (x/y points for a map) |
 | `tel_corners` | corner | `label` (T1, T6-7...), `apex`, `start`, `end` (m from the line), `x`, `y`, reference `min_speed`, `kind` |
 | `tel_corner_laps` | corner of every lap | see below |
+| `tel_straights` | straight | `label` (after T5...), `start`, `end`, `length` (m), reference `top_speed`, `wraps` (crosses the line) |
+| `tel_straight_laps` | straight of every lap | `entry_speed`, `accel` (km/h gained over the first 200 m), `top_speed`, `top_at` (m into the straight), `end_speed`, `clip_drop` (km/h lost at full throttle before braking), `clip_dist`, `plateau` (m within 3 km/h of top speed), `drs` (share of the straight with DRS open) |
 | `tel_laps` | lap | `top_speed`, `full_throttle` and `brake_pct` (% of the lap's distance), `lico_time` and `lico_count`, `gear_changes`, `samples`, `off_line` (average distance from the reference line, m) |
 
 `tel_corner_laps` columns:

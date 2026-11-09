@@ -11,6 +11,7 @@
     python3 -m f1hub compile 2025         the whole season as one SQLite dataset (add --csv DIR for CSV files)
     python3 -m f1hub compile 2025 --telemetry     ... with every corner measured from telemetry (qualifying)
     python3 -m f1hub model 2025           the lap-time model: corrected race pace, degradation, fuel, dirty air
+    python3 -m f1hub cars 2025            car characteristics and circuit groups (needs compile --telemetry)
     python3 -m f1hub live                 live timing for the session running now (paid OpenF1 login)
     python3 -m f1hub gui                  live dashboard in your browser (http://localhost:8765)
     python3 -m f1hub doctor               check the setup and say what to fix
@@ -233,6 +234,35 @@ def cmd_model(args):
     return 0
 
 
+def cmd_cars(args):
+    """Car characteristics across the season and circuits grouped by layout, from the qualifying telemetry."""
+    from . import carreport
+    year = args.season or args.year
+    r = carreport.report(year)
+    if not r.get("exists") or not r.get("sessions"):
+        print(c(f"No qualifying telemetry for {year}: python3 -m f1hub compile {year} --telemetry", "FFB000"), file=sys.stderr)
+        return 1
+    pm = lambda e: "     -" if not e else f"{e['est']:+5.1f}" + (f" ±{1.96 * e['se']:.1f}" if e.get("se") else "     ")
+    print(c(f"\n  {year} car characteristics", "E10600", bold=True)
+          + dim(f"  km/h against the median team, {len(r['sessions'])} qualifying sessions, ± 95%"))
+    print(dim(f"    {'':<18}{'straights':>12}{'slow':>12}{'medium':>12}{'fast':>12}{'traction':>12}"))
+    for t in r["season"]:
+        print(f"    {t['team']:<18}" + "".join(f"{pm(t[k]):>12}" for k in ("straight", "slow", "medium", "fast", "accel")))
+    cs = r["circuits"]
+    if cs["groups"]:
+        print(c("\n  Circuits by layout", "FFFFFF", bold=True))
+        for g in cs["groups"]:
+            print(f"    {g['name']:<20} " + ", ".join(g["circuits"]))
+        print(c("\n  Qualifying gap to pole by circuit group", "FFFFFF", bold=True) + dim("  %"))
+        names = [g["name"] for g in cs["groups"]]
+        print(dim(f"    {'':<18}" + "".join(f"{n[:18]:>20}" for n in names)))
+        for t in cs["suits"]:
+            print(f"    {t['team']:<18}" + "".join(f"{('+%.2f (%d)' % (t['groups'][n]['est'], t['groups'][n]['n'])) if t['groups'].get(n) else '-':>20}" for n in names))
+    else:
+        print(dim(f"\n  Circuits are grouped once 4 or more qualifying sessions are measured ({len(cs['circuits'])} so far)."))
+    return 0
+
+
 def _rounds(spec):
     """'24', '20-24' or '1,5,9' -> a set of round numbers."""
     out = set()
@@ -327,6 +357,8 @@ def main(argv=None):
     co.add_argument("--telemetry", nargs="?", const="quali", choices=("quali", "race", "all"),
                     help="also measure every corner from car telemetry (qualifying by default; minutes a session)")
     co.add_argument("--round", metavar="N", help="only these rounds: 24, 20-24 or 1,5,9")
+    ca = sub.add_parser("cars", help="car characteristics and circuit groups (from compile --telemetry)")
+    ca.add_argument("season", nargs="?", type=int, help="the year (default: --year)")
     mo = sub.add_parser("model", help="the lap-time model for a compiled season")
     mo.add_argument("season", nargs="?", type=int, help="the year (default: --year)")
     mo.add_argument("--round", type=int, help="one race in detail, with every driver's corrected pace")
@@ -369,6 +401,8 @@ def main(argv=None):
             return cmd_compile(args)
         if args.cmd == "model":
             return cmd_model(args)
+        if args.cmd == "cars":
+            return cmd_cars(args)
         season = load_season(args.year)
         if not args.cmd:
             menu(season)

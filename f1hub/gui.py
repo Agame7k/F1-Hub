@@ -1210,6 +1210,20 @@ class App:
             hit = self.explore_cache[key] = (time.time(), cornerreport.report(year, num("session"), num("a"), num("b"), upto))
         return dict(hit[1], spoiler_hidden=upto is not None, job=self._job(year), status=st)
 
+    def cars(self, q):
+        """Car characteristics and circuit groups from the qualifying telemetry. Spoiler mode as corners."""
+        from . import carreport, seasonreport
+        year = self._report_year(q)
+        hide = self.feed.hidden_meeting()
+        upto = seasonreport.round_before(year, hide) if hide else None
+        session = int(q["session"]) if str(q.get("session", "")).isdigit() else None
+        key = ("corners", year, upto, "cars", session)
+        hit = self.explore_cache.get(key)
+        st = seasonreport.status(year)
+        if not hit or hit[0] < (st.get("compiled_at") or 0):
+            hit = self.explore_cache[key] = (time.time(), carreport.report(year, session, upto))
+        return dict(hit[1], spoiler_hidden=upto is not None)
+
     # ---------------------------------------------------------------- home and season
     def home(self, q):
         hc = self.home_cache
@@ -1312,6 +1326,7 @@ ROUTES = {
     "/api/dataset": App.dataset_status, "/api/dataset/compile": App.dataset_compile,
     "/api/season-report": App.season_report,
     "/api/corners": App.corners,
+    "/api/cars": App.cars,
     "/api/ff1/status": App.ff1_status, "/api/ff1/login": App.ff1_login,
     "/api/ff1/recordings": App.ff1_recordings, "/api/ff1/record": App.ff1_record,
     "/api/recordings": App.recordings, "/api/recordings/latency": App.latency,

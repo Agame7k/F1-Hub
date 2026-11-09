@@ -49,12 +49,15 @@ def status(year):
         row = db.execute("""SELECT COUNT(*) AS sessions, COUNT(DISTINCT round) AS rounds, MAX(compiled_at) AS at,
                             SUM(final = 0) AS provisional FROM sessions""").fetchone()
         laps = db.execute("SELECT COUNT(*) FROM laps").fetchone()[0]
+        tel = None      # telemetry measured later (from the command line) also makes cached reports stale
+        if db.execute("SELECT 1 FROM sqlite_master WHERE name = 'tel_sessions'").fetchone():
+            tel = db.execute("SELECT MAX(compiled_at) FROM tel_sessions").fetchone()[0]
     except sqlite3.DatabaseError:
         return {"year": year, "exists": False}
     finally:
         db.close()
     return {"year": year, "exists": True, "sessions": row["sessions"], "rounds": row["rounds"], "laps": laps,
-            "compiled_at": row["at"], "provisional": row["provisional"] or 0,
+            "compiled_at": max(row["at"] or 0, tel or 0) or None, "provisional": row["provisional"] or 0,
             "path": str(dataset.default_path(year))}
 
 

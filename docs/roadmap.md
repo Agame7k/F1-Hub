@@ -74,14 +74,19 @@ Explore > Season report in the dashboard (`#explore/report`), built purely on th
   moments.
 - Still to do: lock-ups (no wheel-speed data), practice sessions.
 
-## Phase 5 - Car characteristics and energy (2026 rules)
+## Phase 5 - Car characteristics and energy (done)
 
-- Straight-line speed against cornering speed in slow, medium and fast corners: each car's aero / drag
-  trade-off at each circuit.
-- Energy clipping: full throttle with speed flat or falling late on a straight, measured per car, per
-  straight and per lap.
-- Circuit clustering by layout (share of full throttle, slow corners, braking events), to predict which
-  cars suit which circuits.
+`python3 -m f1hub cars 2025`, and Explore > Cars & circuits. See [cars.md](cars.md).
+
+- Straights found on each circuit's reference lap and measured on every lap: entry speed, traction (speed gained
+  over the first 200 m), top speed and where, and energy clipping (speed lost, and metres flat, at full throttle).
+- Car characteristics from qualifying: straight-line speed against minimum speed in slow, medium and fast corners,
+  against the median team, per circuit and across the season with 95% intervals - each car's drag / downforce
+  trade-off.
+- Circuits grouped by layout (k-means on full-throttle share, corners per km by type, braking zones, corner and
+  top speed, longest straight), mapped on their principal components, and each team's qualifying gap by group
+  and its correlation with full throttle: which cars suit which circuits.
+- Clipping is small under the 2025 rules; the same measures apply unchanged to 2026, when it is expected to matter.
 
 ## Phase 6 - Strategy simulation and predictions
 

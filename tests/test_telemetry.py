@@ -149,9 +149,42 @@ class Telemetry(unittest.TestCase):
         self.assertEqual(r["laps"], None)              # qualifying: no race stats
         self.assertEqual(r["styles"]["pairs"], [])     # one round: too few for a style
 
+    def test_car_report(self):
+        """One team: too few to compare against a field, or to group circuits - empty, not broken."""
+        from f1hub import carreport
+        r = carreport.report(2025)
+        self.assertEqual([x["session_key"] for x in r["sessions"]], [1])
+        self.assertEqual((r["cars"], r["circuits"]["groups"]), ([], []))
+        self.assertEqual(r["circuits"]["circuits"][0]["corners"], 2)
+
     def test_no_telemetry(self):
         r = cornerreport.report(2024)
         self.assertFalse(r["exists"])
+
+    def test_straights(self):
+        sts = self.db.execute("SELECT * FROM tel_straights ORDER BY straight").fetchall()
+        self.assertEqual(len(sts), 2)
+        self.assertEqual([st["label"] for st in sts], ["after T1", "after T2"])
+        self.assertEqual([st["wraps"] for st in sts], [0, 1])            # T2 to T1 crosses the line
+        lap = self.db.execute("SELECT * FROM tel_straight_laps WHERE driver_number = 1 AND lap_number = 2 AND straight = 1").fetchone()
+        self.assertEqual((lap["top_speed"], lap["clip_drop"]), (300, 0))
+        self.assertGreater(lap["accel"], 30)
+        # the wrapped straight is measured on into the next lap, so it isn't cut at the line
+        wrap = self.db.execute("SELECT * FROM tel_straight_laps WHERE driver_number = 1 AND lap_number = 1 AND straight = 2").fetchone()
+        self.assertEqual(wrap["top_speed"], 300)
+
+    def test_clipping(self):
+        """Flat out, speed peaks then falls 8 km/h before the braking point: clipping."""
+        pts, d = [], 0.0
+        speeds = [200, 230, 255, 275, 290, 300, 304, 305, 303, 300, 298, 297]
+        for k, v in enumerate(speeds):
+            pts.append((d, k * 0.25, v, 100, 0, 7, 11000, 12, 0, 0, 0.0))
+            d += v / 3.6 * 0.25
+        pts.append((d, len(speeds) * 0.25, 280, 0, 1, 7, 11000, 0, 0, 0, 0.0))
+        m = telemetry.measure_straights(pts, [{"straight": 1, "start": 0, "end": d}])[0]
+        self.assertEqual((m["top_speed"], m["end_speed"], m["clip_drop"]), (305, 297, 8))
+        self.assertGreater(m["clip_dist"], 80)
+        self.assertEqual(m["drs"], 1.0)
 
     def test_lift_and_coast(self):
         """Throttle off with no brake for a second at speed, ending on the brakes: one lift-and-coast."""

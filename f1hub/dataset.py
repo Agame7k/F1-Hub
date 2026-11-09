@@ -106,8 +106,15 @@ CREATE TABLE IF NOT EXISTS tel_corner_laps (
     session_key INTEGER, driver_number INTEGER, lap_number INTEGER, corner INTEGER, seg_time REAL, entry_speed REAL,
     min_speed REAL, apex_dist REAL, brake_dist REAL, lift_dist REAL, peak_decel REAL, throttle_dist REAL,
     exit_speed REAL, gear INTEGER, PRIMARY KEY (session_key, driver_number, lap_number, corner));
+CREATE TABLE IF NOT EXISTS tel_straights (
+    session_key INTEGER, straight INTEGER, label TEXT, start REAL, end REAL, length REAL, top_speed REAL,
+    wraps INTEGER, PRIMARY KEY (session_key, straight));
+CREATE TABLE IF NOT EXISTS tel_straight_laps (
+    session_key INTEGER, driver_number INTEGER, lap_number INTEGER, straight INTEGER, entry_speed REAL, accel REAL,
+    top_speed REAL, top_at REAL, end_speed REAL, clip_drop REAL, clip_dist REAL, plateau REAL, drs REAL,
+    PRIMARY KEY (session_key, driver_number, lap_number, straight));
 """
-TEL_TABLES = ("tel_sessions", "tel_corners", "tel_laps", "tel_corner_laps")
+TEL_TABLES = ("tel_sessions", "tel_corners", "tel_laps", "tel_corner_laps", "tel_straights", "tel_straight_laps")
 TABLES = ("sessions", "drivers", "results", "laps", "stints", "pits", "weather", "race_control", "overtakes",
           "positions", "intervals") + TEL_TABLES
 
@@ -495,7 +502,10 @@ def _compile_telemetry(db, path, kinds, rounds, refresh, summary, progress):
     from . import telemetry
     names = [n for k in kinds for n in telemetry.TEL_KINDS[k]]
     marks = ",".join("?" * len(names))
-    done = {k for (k,) in db.execute("SELECT session_key FROM tel_sessions")}
+    # sessions measured by this version of the measurements (an older one is measured again, from the raw files)
+    done = {int(k[len("tel_v:"):]) for (k,) in db.execute("SELECT key FROM meta WHERE key LIKE 'tel_v:%' AND value = ?",
+                                                          (str(telemetry.VERSION),))}
+    done &= {k for (k,) in db.execute("SELECT session_key FROM tel_sessions")}
     db.row_factory = sqlite3.Row
     try:
         sessions = db.execute(f"SELECT * FROM sessions WHERE session_name IN ({marks}) ORDER BY date_start", names).fetchall()
@@ -515,6 +525,7 @@ def _compile_telemetry(db, path, kinds, rounds, refresh, summary, progress):
             log.warning("could not measure the telemetry of %s: %s", label, e)
             summary["failed"].append((f"{label} telemetry", str(e).splitlines()[0] if str(e) else type(e).__name__))
             continue
+        db.execute("INSERT OR REPLACE INTO meta VALUES (?, ?)", (f"tel_v:{s['session_key']}", str(telemetry.VERSION)))
         db.commit()
         summary["telemetry"].append((label, n))
 

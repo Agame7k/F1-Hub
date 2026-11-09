@@ -78,7 +78,9 @@ interval. [docs/model.md](docs/model.md) explains the model and its limits.
 `python3 -m f1hub compile 2025 --telemetry` adds per-corner telemetry: every corner of every lap measured from the
 cars' speed, throttle, brake and position (braking point, minimum speed, throttle pick-up, time through it), shown
 in Explore > Corners: two drivers compared on a map, time lost in slow, medium and fast corners, team-mates'
-styles across the season, and lift and coast in races. [docs/telemetry.md](docs/telemetry.md).
+styles across the season, and lift and coast in races. [docs/telemetry.md](docs/telemetry.md). On top of it, `python3 -m f1hub cars 2025` and
+Explore > Cars & circuits show each car's straight-line speed against its corner speed (drag v downforce), energy
+clipping on the straights, and the circuits grouped by layout with the cars that suit each group ([docs/cars.md](docs/cars.md)).
 
 ## Command line
 
@@ -94,6 +96,7 @@ python3 -m f1hub h2h                     # teammate qualifying/race head-to-head
 python3 -m f1hub export season.json      # everything as JSON
 python3 -m f1hub compile 2025            # the whole season as one SQLite dataset (--csv DIR for CSV)
 python3 -m f1hub compile 2025 --telemetry   # ... with every corner measured from telemetry (all = races too)
+python3 -m f1hub cars 2025               # car characteristics and circuit groups (after --telemetry)
 python3 -m f1hub model 2025              # lap-time model: corrected pace, degradation (--round N for one race)
 python3 -m f1hub live                    # live timing in the terminal (paid OpenF1 login)
 python3 -m f1hub gui                     # browser dashboard

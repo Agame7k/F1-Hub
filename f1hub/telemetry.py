@@ -43,6 +43,10 @@ SLOW, FAST = 120, 200    # km/h minimum speed: slow / medium / fast corners
 LICO_MIN = 0.4           # s with throttle off and no brake, before a braking zone, at speed: lift and coast
 LICO_SPEED = 200         # km/h
 MAX_GAP = 1.6            # s: a lap with a bigger hole in its car data isn't measured
+STRAIGHT_MIN = 300       # m at full throttle on the reference lap: a straight
+ACCEL_OVER = 200         # m from the start of a straight over which the speed gained is measured
+PLATEAU = 3              # km/h below a straight's top speed: "flat" from there to the braking point
+VERSION = 2              # of the measurements: a dataset measured by an older version is measured again (from the raw files)
 
 
 def _ts(s):
@@ -104,9 +108,10 @@ def fetch_session(session, drivers, data_dir, progress=lambda msg: None):
 
 
 # ------------------------------------------------------------------------------------------------ one lap's samples
-def lap_samples(cols, lap_start, lap_time):
+def lap_samples(cols, lap_start, lap_time, strict=True):
     """A lap's car samples with x/y interpolated from the location stream: [(t from lap start, speed, throttle,
-    brake, gear, rpm, drs, x, y)]. None if the data has holes."""
+    brake, gear, rpm, drs, x, y)]. None if the data has holes. strict=False: don't require samples right up to
+    the end (a window running on past the lap, into data that may stop)."""
     t0 = cols["t0"]
     c, l = cols["car"], cols["loc"]
     a_ms, b_ms = round((lap_start - t0) * 1000), round((lap_start + lap_time - t0) * 1000)
@@ -130,7 +135,7 @@ def lap_samples(cols, lap_start, lap_time):
                     c["drs"][k], x, y))
     if len(out) < 10 or max(b[0] - a[0] for a, b in zip(out, out[1:])) > MAX_GAP:
         return None
-    if out[0][0] > MAX_GAP or lap_time - out[-1][0] > MAX_GAP:
+    if out[0][0] > MAX_GAP or (strict and lap_time - out[-1][0] > MAX_GAP):
         return None
     return out
 
@@ -232,6 +237,77 @@ def find_corners(dist, speed, brake, throttle, official=(), length=None):
         c["end"] = (c["apex"] + next_apex) / 2
         c["prev_apex"] = prev_apex
     return corners
+
+
+def find_straights(pts, corners, length):
+    """Full-throttle stretches of the reference lap at least STRAIGHT_MIN long (one crossing the line is joined up).
+    Named after the corner before them."""
+    runs, cur = [], None
+    for p in pts:
+        flat = p[3] >= FULL_THROTTLE and not p[4]
+        if flat and cur is None:
+            cur = [p[0], p[0], p[2]]
+        elif flat:
+            cur[1], cur[2] = p[0], max(cur[2], p[2])
+        elif cur is not None:
+            runs.append(cur)
+            cur = None
+    if cur is not None:
+        runs.append(cur)
+    if len(runs) > 1 and runs[0][0] <= pts[0][0] + 30 and runs[-1][1] >= length - 60:   # the pit straight
+        last = runs.pop()
+        runs[0] = [last[0], runs[0][1] + length, max(last[2], runs[0][2])]
+        runs.append(runs.pop(0))
+    out = []
+    for a, b, top in runs:
+        if b - a < STRAIGHT_MIN:
+            continue
+        before = [c for c in corners if c["apex"] <= a] or corners[-1:]
+        label = f"after {before[-1]['label']}" if before else "straight"
+        out.append({"straight": len(out) + 1, "label": label, "start": a, "end": b, "top_speed": top})
+    return out
+
+
+def st_wraps(straights, length):
+    return any(st["end"] > length for st in straights)
+
+
+def measure_straights(pts, straights):
+    """Each straight on one lap: entry speed, speed gained over the first ACCEL_OVER m, top speed and where, speed
+    at the end of full throttle, and clipping - speed lost (or not gained) while still flat out."""
+    d = [p[0] for p in pts]
+    out = []
+    for st in straights:
+        idx = [k for k in range(len(d)) if st["start"] - 30 <= d[k] <= st["end"] + 80]
+        if len(idx) < 4:
+            continue
+        # the longest unbroken full-throttle run inside the straight
+        runs, cur = [], []
+        for k in idx:
+            if pts[k][3] >= FULL_THROTTLE and not pts[k][4]:
+                cur.append(k)
+            elif cur:
+                runs.append(cur)
+                cur = []
+        if cur:
+            runs.append(cur)
+        if not runs:
+            continue
+        run = max(runs, key=lambda r: d[r[-1]] - d[r[0]])
+        if d[run[-1]] - d[run[0]] < STRAIGHT_MIN / 2:
+            continue
+        spd = [pts[k][2] for k in run]
+        top_i = max(range(len(run)), key=lambda i: spd[i])
+        top = spd[top_i]
+        flat_from = next(i for i in range(len(run)) if spd[i] >= top - PLATEAU)
+        entry = _interp(d, [p[2] for p in pts], st["start"])
+        out.append({"straight": st["straight"], "entry_speed": round(entry),
+                    "accel": round(_interp(d, [p[2] for p in pts], st["start"] + ACCEL_OVER) - entry, 1),
+                    "top_speed": top, "top_at": round(d[run[top_i]] - st["start"], 1), "end_speed": spd[-1],
+                    "clip_drop": top - spd[-1], "clip_dist": round(d[run[-1]] - d[run[top_i]], 1),
+                    "plateau": round(d[run[-1]] - d[run[flat_from]], 1),
+                    "drs": round(sum(1 for k in run if (pts[k][7] or 0) >= 10) / len(run), 2)})
+    return out
 
 
 # ------------------------------------------------------------------------------------------------ measuring a lap
@@ -343,7 +419,7 @@ def analyse_session(db, session_key, raw, official=None):
         if s:
             ref = (n, lap, lt, s)
             break
-    for tbl in ("tel_sessions", "tel_corners", "tel_laps", "tel_corner_laps"):
+    for tbl in ("tel_sessions", "tel_corners", "tel_laps", "tel_corner_laps", "tel_straights", "tel_straight_laps"):
         db.execute(f"DELETE FROM {tbl} WHERE session_key = ?", (session_key,))
     if not ref:
         return 0
@@ -370,6 +446,11 @@ def analyse_session(db, session_key, raw, official=None):
         db.execute("INSERT INTO tel_corners VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                    (session_key, c["corner"], c["label"], round(c["apex"], 1), round(c["start"], 1), round(c["end"], 1),
                     round(x), round(y), c["min_speed"], c["kind"]))
+    straights = find_straights(pts, corners, line.length)
+    for st in straights:
+        db.execute("INSERT INTO tel_straights VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                   (session_key, st["straight"], st["label"], round(st["start"], 1), round(st["end"], 1),
+                    round(st["end"] - st["start"], 1), st["top_speed"], int(st["end"] > line.length)))
     measured = 0
     for n, lap, start, lt, po, pi in laps:
         if n not in raw:
@@ -378,6 +459,13 @@ def analyse_session(db, session_key, raw, official=None):
         if not s:
             continue
         on = _on_line(line, s)
+        # the pit straight crosses the line: read on into the next few seconds so it is one continuous stretch
+        ext = lap_samples(raw[n], _ts(start), lt + 12, strict=False) if st_wraps(straights, line.length) else None
+        on_ext = _on_line(line, ext) if ext else on
+        sts = measure_straights(on_ext, straights) if not (po or pi) else []
+        db.executemany("INSERT INTO tel_straight_laps VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                       [(session_key, n, lap, m["straight"], m["entry_speed"], m["accel"], m["top_speed"], m["top_at"],
+                         m["end_speed"], m["clip_drop"], m["clip_dist"], m["plateau"], m["drs"]) for m in sts])
         if on[-1][0] - on[0][0] < line.length * 0.9:     # not a full lap on the line (pit lane, a cut)
             continue
         lm, cms = measure_lap(on, corners, line.length, lt)
