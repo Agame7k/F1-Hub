@@ -2,9 +2,10 @@
 .openf1.env
 .env
 
-# Local data: API cache, live recordings, radio transcripts
+# Local data: API cache, live recordings, radio transcripts, season datasets
 .f1cache/
 recordings/
+.f1data/
 
 # Python
 __pycache__/

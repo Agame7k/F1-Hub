@@ -63,6 +63,14 @@ Plus: crash detection, alerts (with optional sound and desktop notifications), a
 
 While the dashboard runs, `http://localhost:8765/api/feed` streams what it shows (live, delayed or a replay) as Server-Sent Events, by channel: `session`, `leaderboard`, `positions` (or `positions.VER` for one car), `race_control`, `weather` and `track`. Use it for stream overlays, a Stream Deck or a second screen. `examples/feed_client.py` is a 50-line client; [docs/feed.md](docs/feed.md) lists every field.
 
+### Season dataset
+
+`python3 -m f1hub compile 2025` puts every finished race, sprint and qualifying session of a season into one
+SQLite file: laps with tyre, pit, gap, position and weather on every lap, plus results, stints, pit stops,
+weather, race control, overtakes and the raw position and gap series. Query it with SQL, pandas or R, or export
+CSV. [docs/dataset.md](docs/dataset.md) lists the tables; [docs/roadmap.md](docs/roadmap.md) is the analysis
+built on it, phase by phase.
+
 ## Command line
 
 ```bash
@@ -75,6 +83,7 @@ python3 -m f1hub race china --sprint     # sprint report
 python3 -m f1hub braking monza VER NOR   # braking telemetry on each driver's fastest lap
 python3 -m f1hub h2h                     # teammate qualifying/race head-to-heads
 python3 -m f1hub export season.json      # everything as JSON
+python3 -m f1hub compile 2025            # the whole season as one SQLite dataset (--csv DIR for CSV)
 python3 -m f1hub live                    # live timing in the terminal (paid OpenF1 login)
 python3 -m f1hub gui                     # browser dashboard
 python3 -m f1hub doctor                  # check the setup: logins, stream, FastF1, tools, disk, recent errors

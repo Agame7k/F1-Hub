@@ -24,6 +24,9 @@ setTimeout(sendView, 500);
 const TAB_ORDER = ["home", "live", "rc", "map", "strat", "ins", "gaps", "drv", "radio", "champ", "cal", "explore"];
 const DIGIT_TABS = TAB_ORDER.slice(1);      // 1-9, 0 = live timing … calendar; H = home
 function openTab(t) {
+  const sub = String(t || "").split("/");      // #explore/report opens an Explore view directly (bookmarkable)
+  if (sub[0] === "explore" && sub[1] && typeof XP !== "undefined") XP.view = sub[1];
+  t = sub[0];
   if (!TAB_ORDER.includes(t)) t = "live";
   activeTab = t;
   try { localStorage.setItem("f1hub.tab", JSON.stringify(t)); } catch (e) {}

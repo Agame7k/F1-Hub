@@ -135,7 +135,7 @@
   <dl>
     <dt><kbd>Ctrl</kbd> <kbd>K</kbd></dt><dd>Jump to any tab, driver or action</dd>
     <dt><kbd>H</kbd></dt><dd>Home - what's next, latest results, replays</dd>
-    <dt><kbd>E</kbd></dt><dd>Explore - session analysis, telemetry lab, season stats, circuit preview, FastF1</dd>
+    <dt><kbd>E</kbd></dt><dd>Explore - session analysis, telemetry lab, season stats and report, circuit preview, FastF1</dd>
     <dt><kbd>1</kbd> … <kbd>0</kbd></dt><dd>Switch tab (Live timing … Calendar)</dd>
     <dt><kbd>[</kbd> <kbd>]</kbd></dt><dd>Previous / next tab</dd>
     <dt><kbd>S</kbd></dt><dd>Settings - delay, spoilers, replays</dd>
@@ -191,6 +191,7 @@
         <button class="btn" onclick="xOpen('analysis')"><span><svg class="ico" aria-hidden="true"><use href="#i-chart"/></svg>Session analysis</span><small>race pace, tyre wear, lap chart, team-mates</small></button>
         <button class="btn" onclick="xOpen('lab')"><span><svg class="ico" aria-hidden="true"><use href="#i-activity"/></svg>Telemetry lab</span><small>any two laps, any session</small></button>
         <button class="btn" onclick="xOpen('stats')"><span><svg class="ico" aria-hidden="true"><use href="#i-trend"/></svg>Season stats</span><small>form, head-to-heads, averages</small></button>
+        <button class="btn" onclick="xOpen('report')"><span><svg class="ico" aria-hidden="true"><use href="#i-chart"/></svg>Season report</span><small>pace, race craft, tyres, pit stops</small></button>
         <button class="btn" onclick="xOpen('ff1')"><span><svg class="ico" aria-hidden="true"><use href="#i-rec"/></svg>FastF1</span><small>older seasons, recordings</small></button></div></div>
     </div>
     <div class="stack">
@@ -398,6 +399,7 @@
     <button data-x="analysis"><svg class="ico" aria-hidden="true"><use href="#i-chart"/></svg>Session analysis</button>
     <button data-x="lab"><svg class="ico" aria-hidden="true"><use href="#i-activity"/></svg>Telemetry lab</button>
     <button data-x="stats"><svg class="ico" aria-hidden="true"><use href="#i-trend"/></svg>Season stats</button>
+    <button data-x="report"><svg class="ico" aria-hidden="true"><use href="#i-chart"/></svg>Season report</button>
     <button data-x="circuit"><svg class="ico" aria-hidden="true"><use href="#i-map"/></svg>Circuit preview</button>
     <button data-x="ff1"><svg class="ico" aria-hidden="true"><use href="#i-rec"/></svg>FastF1 &amp; recordings</button>
     <span class="xnote" id="xff1chip"></span>
@@ -421,6 +423,11 @@
     <div class="xpick"><select id="xsyear" onchange="xStats()"></select><span class="xnote" id="xstatsnote"></span></div>
     <div id="xstats"></div>
   </section>
+  <section id="x-report" class="hidden">
+    <div class="xpick"><select id="srYear" onchange="srLoad()"></select><button class="btn" id="srBtn" onclick="srCompile()">Update</button>
+      <span class="xnote" id="srStatus"></span></div>
+    <div id="srOut"></div>
+  </section>
   <section id="x-circuit" class="hidden">
     <div class="xpick"><select id="xcmeet" onchange="xCircuit()"></select><span class="xnote" id="xcnote"></span></div>
     <div id="xcircuit"></div>
@@ -442,6 +449,7 @@
 <script src="/static/racefx.js"></script>
 <script src="/static/demo.js"></script>
 <script src="/static/explore.js"></script>
+<script src="/static/seasonreport.js"></script>
 <script src="/static/home.js"></script>
 <script src="/static/status.js"></script>
 <script src="/static/polish.js"></script>

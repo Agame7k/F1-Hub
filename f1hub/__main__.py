@@ -8,6 +8,7 @@
     python3 -m f1hub braking 5 VER NOR    braking telemetry on each driver's fastest lap
     python3 -m f1hub h2h
     python3 -m f1hub export results.json
+    python3 -m f1hub compile 2025         the whole season as one SQLite dataset (add --csv DIR for CSV files)
     python3 -m f1hub live                 live timing for the session running now (paid OpenF1 login)
     python3 -m f1hub gui                  live dashboard in your browser (http://localhost:8765)
     python3 -m f1hub doctor               check the setup and say what to fix
@@ -134,6 +135,41 @@ def cmd_export(season, path):
     print(f"Wrote {path}")
 
 
+def cmd_compile(args):
+    from . import dataset
+    kinds = dataset.DEFAULT_KINDS + (("practice",) if args.practice else ())
+    year = args.season or args.year
+
+    def progress(msg):
+        print(dim(f"  {msg}...".ljust(70)[:70]), end="\r", file=sys.stderr, flush=True)
+    t0 = datetime.now()
+    path, summary = dataset.compile_season(year, kinds, args.out, args.refresh, progress)
+    print(" " * 70, end="\r", file=sys.stderr)
+    laps = sum(n for _, n in summary["compiled"])
+    print(c(f"\n  {year} season dataset", "E10600", bold=True) + dim(f"  {path}"))
+    print(f"  {len(summary['compiled'])} sessions compiled ({laps} laps) in "
+          f"{(datetime.now() - t0).total_seconds():.0f}s, {len(summary['skipped'])} already up to date, "
+          f"{len(summary['pending'])} not run yet")
+    for label, why in summary["failed"]:
+        print(c(f"  Could not compile {label}: {why}", "FFB000"))
+    db = dataset.connect(path)
+    try:
+        n = dataset.counts(db)
+        print(dim("  " + ", ".join(f"{v} {k.replace('_', ' ')}" for k, v in n.items())))
+        if n["laps"]:
+            for title, note, rows in dataset.glance(db):
+                if rows:
+                    print(c(f"\n  {title}", "FFFFFF", bold=True) + dim(f"  {note}"))
+                    for label, value in rows:
+                        print(f"    {str(value):>8}  {label}")
+        if args.csv:
+            paths = dataset.export_csv(db, args.csv)
+            print(f"\n  Wrote {len(paths)} CSV files to {args.csv}")
+    finally:
+        db.close()
+    return 1 if summary["failed"] and not summary["compiled"] and not summary["skipped"] else 0
+
+
 # --------------------------------------------------------------------------- interactive
 def menu(season):
     while True:
@@ -210,6 +246,12 @@ def main(argv=None):
                     help="let web pages from anywhere (e.g. an OBS overlay) read the data feed at /api/feed")
     e = sub.add_parser("export")
     e.add_argument("path", nargs="?", default="f1_export.json")
+    co = sub.add_parser("compile", help="compile a whole season into one SQLite dataset")
+    co.add_argument("season", nargs="?", type=int, help="the year (default: --year)")
+    co.add_argument("--practice", action="store_true", help="include practice sessions")
+    co.add_argument("--refresh", action="store_true", help="compile again sessions already in the dataset")
+    co.add_argument("--out", help="the SQLite file (default: .f1data/season_YEAR.sqlite)")
+    co.add_argument("--csv", metavar="DIR", help="also write every table as a CSV file in DIR")
     dr = sub.add_parser("doctor", help="check the setup and say what to fix")
     dr.add_argument("--port", type=int, default=8765, help="the dashboard's port")
     dr.add_argument("--no-network", action="store_true", help="skip the checks that contact OpenF1")
@@ -245,6 +287,8 @@ def main(argv=None):
                 season = None
             watch(season, args.session, args.interval, args.once)
             return 0
+        if args.cmd == "compile":
+            return cmd_compile(args)
         season = load_season(args.year)
         if not args.cmd:
             menu(season)
