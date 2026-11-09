@@ -263,6 +263,89 @@ def cmd_cars(args):
     return 0
 
 
+def cmd_strategy(args):
+    """Strategy inputs, backtested race predictions, title odds and, for one race, its strategies and pit calls."""
+    from . import seasonreport, strategyreport
+    year = args.season or args.year
+    if not seasonreport.status(year).get("exists"):
+        print(c(f"The {year} season isn't compiled yet: python3 -m f1hub compile {year}", "FFB000"), file=sys.stderr)
+        return 1
+    say = lambda m: print(dim(f"  {m}...".ljust(78)), end="\r", file=sys.stderr, flush=True)
+    if args.grade:
+        n = strategyreport.grade_all(year, progress=say)
+        print(" " * 78, end="\r", file=sys.stderr)
+        print(c(f"  Graded the pit calls of {n} races.", "FFFFFF"))
+    r = strategyreport.report(year, args.round, grade=args.round is not None, progress=say)
+    print(" " * 78, end="\r", file=sys.stderr)
+    if not r.get("races"):
+        print(c(f"No races in the {year} dataset.", "FFB000"), file=sys.stderr)
+        return 1
+    s = r["season"]
+    pct = lambda v: "   -" if v is None else f"{100 * v:3.0f}%"
+    if args.round is None:
+        print(c(f"\n  {year} strategy inputs", "E10600", bold=True)
+              + dim(f"  pit loss {s['pit_loss']:.1f} s green, {100 * s['sc_ratio']:.0f}% of it under a Safety Car"))
+        print(dim(f"    {'':<20}{'pit loss':>10}{'under SC':>10}{'SC/race':>10}{'passing':>10}"))
+        for x in s["inputs"]:
+            print(f"    R{x['round']:<3}{x['circuit'][:16]:<16}{x['pit_loss']:>9.1f}s{x['pit_loss_sc']:>9.1f}s{pct(x['sc_race']):>10}" + (f"{x['passing']:>+10.2f}" if x["passing"] is not None else f"{'-':>10}"))
+        pm = s["pass"]
+        print(dim(f"    passing: chance the car within a second behind gets past on the next lap, "
+                  f"{pct(next(p for a, p in pm['curve'] if a == 0))} level on pace, "
+                  f"{pct(next(p for a, p in pm['curve'] if a == 0.5))} at 0.5 s/lap quicker, {pct(next(p for a, p in pm['curve'] if a == 1.0))} at 1 s ({pm['n']} cases)"))
+        sc = s["backtest"]["score"]
+        print(c("\n  Race predictions, made before each race", "FFFFFF", bold=True)
+              + dim(f"  {sc['races']} races · Brier score (lower is better) against a grid-position baseline"))
+        for k, lab in (("win", "win"), ("podium", "podium")):
+            x = sc[k]
+            print(f"    {lab:<8} {x['brier']:.4f} v {x['baseline']:.4f}   skill {100 * x['skill']:+.1f}%")
+        print(dim(f"    the favourite won {sc['favourite_won']} of {sc['races']}"))
+        for rr in s["backtest"]["rounds"]:
+            top = rr["drivers"][:3]
+            w = next((d for d in rr["drivers"] if d["finish"] == 1), None)
+            print(f"    R{rr['round']:<3}{rr['circuit'][:16]:<16} " + "  ".join(f"{d['code']} {pct(d['win'])}" for d in top)
+                  + dim(f"   won by {w['code']} ({pct(w['win']).strip()})" if w else ""))
+        print(c("\n  Title chances after each round", "FFFFFF", bold=True))
+        for t in s["title"]:
+            line = strategyreport.title_line(s["title"], s["drivers"], t["after"])[:3]
+            print(f"    after R{t['after']:<3}" + "  ".join(f"{cd} {pct(p)}" for cd, p in line))
+        g = r["graded"]
+        if g["races"]:
+            print(c("\n  Pit calls against the simulation", "FFFFFF", bold=True)
+                  + dim(f"  {g['races']} of {g['of']} races graded · positions lost to a clearly better option"))
+            for t in g["teams"]:
+                print(f"    {t['team'][:20]:<20}{t['stops']:>4} stops{t['clear']:>4} costly{t['lost']:>7.1f} positions")
+        else:
+            print(dim(f"\n  Grade every race's pit calls with: python3 -m f1hub strategy {year} --grade"))
+        return 0
+    race = r["race"]
+    if race["round"] != args.round:
+        print(c(f"No race {args.round} in the {year} dataset.", "FFB000"), file=sys.stderr)
+        return 1
+    print(c(f"\n  R{race['round']} {race['name']}", "E10600", bold=True))
+    if race.get("skipped"):
+        print(dim(f"  no strategy simulation: {race['skipped']}"))
+    else:
+        p = race["plan"]
+        print(c("\n  Strategies", "FFFFFF", bold=True) + dim(f"  free air, with the race's measured tyres; {p['laps']} laps, pit loss {p['pit_loss']:.1f} s"))
+        for x in p["sequences"][:6]:
+            stops = ", ".join(f"lap {a} {b.lower()}" for a, b in x["stops"])
+            print(f"    {x['label']:<8}{'+%.1f s' % x['loss'] if x['loss'] else 'best':>9}   {x['start'].lower()}, {stops}")
+        print(dim("    as run: " + ", ".join(f"{k} x{v}" for k, v in race["actual"])))
+    pr = race.get("prediction")
+    if pr:
+        print(c("\n  Prediction before the race", "FFFFFF", bold=True) + dim("  win, podium (grid baseline in brackets)"))
+        for d in pr["drivers"][:10]:
+            print(f"    {d['code'] or d['number']:<5}P{d['grid'] or '-':<3}{pct(d['win'])} ({pct(d['base_win']).strip()}){pct(d['podium']):>7} ({pct(d['base_podium']).strip()})"
+                  + dim(f"   finished {d['finish'] or d['status']}"))
+    g = race.get("grade")
+    if g and g.get("stops"):
+        print(c("\n  Pit calls", "FFFFFF", bold=True) + dim("  expected finishing position as run, and the best option where it is clearly better"))
+        for x in g["stops"]:
+            better = f"   {x['best']}: {x['cost']:.1f} places better" if x["cost"] else ""
+            print(f"    {x['code'] or x['number']:<5}lap {x['lap']:<3}{x['from'][0]} ({x['age']} laps) to {x['to'][0]}   P{x['position_before']:<3}-> {x['expected']:5.1f}" + c(better, "FFB000"))
+    return 0
+
+
 def _rounds(spec):
     """'24', '20-24' or '1,5,9' -> a set of round numbers."""
     out = set()
@@ -359,6 +442,10 @@ def main(argv=None):
     co.add_argument("--round", metavar="N", help="only these rounds: 24, 20-24 or 1,5,9")
     ca = sub.add_parser("cars", help="car characteristics and circuit groups (from compile --telemetry)")
     ca.add_argument("season", nargs="?", type=int, help="the year (default: --year)")
+    sg = sub.add_parser("strategy", help="strategy simulation, pit-call grading and race predictions")
+    sg.add_argument("season", nargs="?", type=int, help="the year (default: --year)")
+    sg.add_argument("--round", type=int, help="one race in detail: best strategies, prediction, pit calls")
+    sg.add_argument("--grade", action="store_true", help="grade the pit calls of every race (about 10 s a race, kept)")
     mo = sub.add_parser("model", help="the lap-time model for a compiled season")
     mo.add_argument("season", nargs="?", type=int, help="the year (default: --year)")
     mo.add_argument("--round", type=int, help="one race in detail, with every driver's corrected pace")
@@ -403,6 +490,8 @@ def main(argv=None):
             return cmd_model(args)
         if args.cmd == "cars":
             return cmd_cars(args)
+        if args.cmd == "strategy":
+            return cmd_strategy(args)
         season = load_season(args.year)
         if not args.cmd:
             menu(season)

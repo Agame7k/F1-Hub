@@ -82,6 +82,11 @@ styles across the season, and lift and coast in races. [docs/telemetry.md](docs/
 Explore > Cars & circuits show each car's straight-line speed against its corner speed (drag v downforce), energy
 clipping on the straights, and the circuits grouped by layout with the cars that suit each group ([docs/cars.md](docs/cars.md)).
 
+`python3 -m f1hub strategy 2025` and Explore > Strategy & predictions simulate races lap by lap from the
+measured pit loss, Safety Car chances and overtaking: the best strategies for every race, every pit stop graded
+against the alternatives at the time, win and podium chances before each race scored against what happened, and
+title chances after every round ([docs/strategy.md](docs/strategy.md)).
+
 ## Command line
 
 ```bash
@@ -98,6 +103,7 @@ python3 -m f1hub compile 2025            # the whole season as one SQLite datase
 python3 -m f1hub compile 2025 --telemetry   # ... with every corner measured from telemetry (all = races too)
 python3 -m f1hub cars 2025               # car characteristics and circuit groups (after --telemetry)
 python3 -m f1hub model 2025              # lap-time model: corrected pace, degradation (--round N for one race)
+python3 -m f1hub strategy 2025           # strategies, graded pit calls, predictions, title odds (--round N, --grade)
 python3 -m f1hub live                    # live timing in the terminal (paid OpenF1 login)
 python3 -m f1hub gui                     # browser dashboard
 python3 -m f1hub doctor                  # check the setup: logins, stream, FastF1, tools, disk, recent errors

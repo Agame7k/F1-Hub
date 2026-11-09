@@ -10,6 +10,7 @@ or OPENF1_TOKEN if you already have an access token.
 import collections
 import contextlib
 import hashlib
+import http.client
 import json
 import logging
 import os
@@ -256,6 +257,11 @@ def get(endpoint, ttl=FOREVER, cache=True, fetched_after=None, record=None, **pa
             if stale is not None:
                 return stale
             raise APIError(f"Network error for {url}: {e.reason}") from None
+        except (http.client.HTTPException, ConnectionError, TimeoutError) as e:
+            # a response cut off part-way (large telemetry downloads), a reset or a read timeout: try again
+            log.warning("retrying %s after %s", url, type(e).__name__)
+            time.sleep(2 ** attempt)
+            continue
     else:
         if stale is not None:
             return stale

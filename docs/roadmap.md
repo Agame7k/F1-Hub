@@ -88,13 +88,20 @@ Explore > Season report in the dashboard (`#explore/report`), built purely on th
   and its correlation with full throttle: which cars suit which circuits.
 - Clipping is small under the 2025 rules; the same measures apply unchanged to 2026, when it is expected to matter.
 
-## Phase 6 - Strategy simulation and predictions
+## Phase 6 - Strategy simulation and predictions (done)
 
-- Pit loss per circuit from real stops; overtaking probability from pace and tyre-age gaps; Safety Car
-  probability per lap and circuit from history.
-- Monte Carlo simulation of every viable strategy, before the race and live.
-- Grading of the calls teams made, against what the simulation said was best at the time.
-- Win, podium and championship probabilities, each scored afterwards (Brier score, calibration).
+`python3 -m f1hub strategy 2025`, and Explore > Strategy & predictions. See [strategy.md](strategy.md).
+
+- Pit loss per circuit from real stops, green and under a Safety Car; Safety Car and VSC probability per lap and
+  circuit, blended with the season's rate; overtaking probability from the pace advantage on the tyres at the
+  time, with a shrunk effect per circuit.
+- A lap-by-lap Monte Carlo race simulator (passing, Safety Cars that bunch the field and cheapen stops,
+  retirements), and from it every viable one- and two-stop strategy for a race, ranked with Safety Car risk.
+- Every pit stop graded against stopping later, on another tyre or not at all, from the state of the race at
+  the time, reported only when an alternative is clearly better.
+- Win and podium chances before every race from what was known at the time, scored afterwards against a
+  grid-position baseline (Brier score, calibration); title chances after every round.
+- Still to do: the simulator on live timing during a race.
 
 ## Phase 7 - Race control and radio
 

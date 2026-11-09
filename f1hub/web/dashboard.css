@@ -1048,3 +1048,5 @@
   #x-report tbody tr.on td { background: #1f2430; }
   #x-report th.click { cursor: pointer; } #x-report th.on { color: var(--text); }
   #x-report td .ico { width: 13px; height: 13px; vertical-align: -2px; }
+  .sgtyre { display: inline-block; min-width: 16px; height: 16px; line-height: 12px; border: 2px solid; border-radius: 50%; font-size: 9px; font-weight: 700; text-align: center; margin-right: 2px; color: var(--text); }
+  .sgwarn { color: var(--amber); }
