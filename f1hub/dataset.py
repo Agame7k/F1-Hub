@@ -90,8 +90,26 @@ CREATE VIEW laps_full AS
     FROM laps l JOIN sessions s USING (session_key)
     LEFT JOIN drivers d ON d.session_key = l.session_key AND d.driver_number = l.driver_number;
 """
+# per-corner telemetry (f1hub/telemetry.py): opt-in, added to any dataset without a rebuild
+TEL_SCHEMA = """
+CREATE TABLE IF NOT EXISTS tel_sessions (
+    session_key INTEGER PRIMARY KEY, ref_driver INTEGER, ref_lap INTEGER, length REAL, outline TEXT, drivers INTEGER,
+    compiled_at REAL);
+CREATE TABLE IF NOT EXISTS tel_corners (
+    session_key INTEGER, corner INTEGER, label TEXT, apex REAL, start REAL, end REAL, x INTEGER, y INTEGER,
+    min_speed REAL, kind TEXT, PRIMARY KEY (session_key, corner));
+CREATE TABLE IF NOT EXISTS tel_laps (
+    session_key INTEGER, driver_number INTEGER, lap_number INTEGER, top_speed REAL, full_throttle REAL, brake_pct REAL,
+    lico_time REAL, lico_count INTEGER, gear_changes INTEGER, samples INTEGER, off_line REAL,
+    PRIMARY KEY (session_key, driver_number, lap_number));
+CREATE TABLE IF NOT EXISTS tel_corner_laps (
+    session_key INTEGER, driver_number INTEGER, lap_number INTEGER, corner INTEGER, seg_time REAL, entry_speed REAL,
+    min_speed REAL, apex_dist REAL, brake_dist REAL, lift_dist REAL, peak_decel REAL, throttle_dist REAL,
+    exit_speed REAL, gear INTEGER, PRIMARY KEY (session_key, driver_number, lap_number, corner));
+"""
+TEL_TABLES = ("tel_sessions", "tel_corners", "tel_laps", "tel_corner_laps")
 TABLES = ("sessions", "drivers", "results", "laps", "stints", "pits", "weather", "race_control", "overtakes",
-          "positions", "intervals")
+          "positions", "intervals") + TEL_TABLES
 
 
 def default_path(year):
@@ -108,13 +126,14 @@ def connect(path):
     except sqlite3.DatabaseError:
         version = None
     if version and version[0] == str(SCHEMA_VERSION):
+        db.executescript(TEL_SCHEMA)
         return db
     db.close()
     if path.exists():
         log.info("rebuilding %s for schema version %s", path.name, SCHEMA_VERSION)
         path.unlink()
     db = sqlite3.connect(path)
-    db.executescript(SCHEMA)
+    db.executescript(SCHEMA + TEL_SCHEMA)
     db.execute("INSERT INTO meta VALUES ('schema_version', ?)", (str(SCHEMA_VERSION),))
     db.commit()
     return db
@@ -419,18 +438,23 @@ def compile_session(db, session, rnd, year):
     return len(laps)
 
 
-def compile_season(year, kinds=DEFAULT_KINDS, path=None, refresh=False, progress=lambda msg: None):
+def compile_season(year, kinds=DEFAULT_KINDS, path=None, refresh=False, progress=lambda msg: None, telemetry=(),
+                   rounds=None):
     """Compile every finished session of the given kinds. Returns (path, summary) where summary lists the sessions
-    compiled, skipped (already final in the dataset), not run yet, and failed (with the reason)."""
+    compiled, skipped (already final in the dataset), not run yet, and failed (with the reason), and the sessions
+    whose telemetry was measured.
+
+    telemetry: kinds of session (telemetry.TEL_KINDS: "quali", "race") to add per-corner telemetry for - slow the
+    first time (minutes a session). rounds: only these round numbers."""
     path = Path(path or default_path(year))
     season = Season(year).load(lambda m: progress(f"season: {m}"))
     names = {n for k in kinds for n in KINDS[k]}
     db = connect(path)
-    summary = {"compiled": [], "skipped": [], "pending": [], "failed": []}
+    summary = {"compiled": [], "skipped": [], "pending": [], "failed": [], "telemetry": []}
     try:
         final = {k for (k,) in db.execute("SELECT session_key FROM sessions WHERE final = 1")}
         for rnd in season.rounds:
-            if rnd.cancelled:
+            if rnd.cancelled or (rounds and rnd.number not in rounds):
                 continue
             for name, s in sorted(rnd.sessions.items(), key=lambda kv: kv[1].get("date_start") or ""):
                 if name not in names:
@@ -455,12 +479,44 @@ def compile_season(year, kinds=DEFAULT_KINDS, path=None, refresh=False, progress
                     continue
                 db.commit()
                 summary["compiled"].append((label, n))
+        if telemetry:
+            _compile_telemetry(db, path, telemetry, rounds, refresh, summary, progress)
         db.execute("INSERT OR REPLACE INTO meta VALUES ('year', ?)", (str(year),))
         db.execute("INSERT OR REPLACE INTO meta VALUES ('compiled_at', ?)", (str(time.time()),))
         db.commit()
     finally:
         db.close()
     return path, summary
+
+
+def _compile_telemetry(db, path, kinds, rounds, refresh, summary, progress):
+    """Per-corner telemetry for the dataset's sessions of these kinds that don't have it yet (all with refresh).
+    The raw telemetry is kept next to the dataset, so measuring again needs no download."""
+    from . import telemetry
+    names = [n for k in kinds for n in telemetry.TEL_KINDS[k]]
+    marks = ",".join("?" * len(names))
+    done = {k for (k,) in db.execute("SELECT session_key FROM tel_sessions")}
+    db.row_factory = sqlite3.Row
+    try:
+        sessions = db.execute(f"SELECT * FROM sessions WHERE session_name IN ({marks}) ORDER BY date_start", names).fetchall()
+    finally:
+        db.row_factory = None
+    for s in sessions:
+        if (rounds and s["round"] not in rounds) or (s["session_key"] in done and not refresh):
+            continue
+        label = f"R{s['round']} {s['meeting_name']} - {s['session_name']}"
+        try:
+            n = telemetry.compile_session(db, s, path.parent, lambda m: progress(f"{label}: {m}"))
+        except api.LiveSessionLock:
+            db.rollback()
+            raise
+        except (api.APIError, KeyError, TypeError, ValueError, OSError) as e:
+            db.rollback()
+            log.warning("could not measure the telemetry of %s: %s", label, e)
+            summary["failed"].append((f"{label} telemetry", str(e).splitlines()[0] if str(e) else type(e).__name__))
+            continue
+        db.commit()
+        summary["telemetry"].append((label, n))
 
 
 # ------------------------------------------------------------------------------------------------ reading it back

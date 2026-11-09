@@ -1161,10 +1161,11 @@ class App:
                     raise BadRequest(f"already compiling {j['year']}")
                 return self.dataset_status(q)
             j.update(year=year, running=True, msg="starting", error=None, summary=None, at=time.time())
+        tel = {"quali": ("quali",), "race": ("race",), "all": ("quali", "race")}.get(q.get("telemetry"), ())
 
         def run():
             try:
-                _, summary = dataset.compile_season(year, progress=lambda m: j.update(msg=m))
+                _, summary = dataset.compile_season(year, progress=lambda m: j.update(msg=m), telemetry=tel)
                 j.update(summary=summary, msg="done")
             except api.LiveSessionLock:
                 j.update(error="A live session is running, so OpenF1 has locked free access until it ends.")
@@ -1175,7 +1176,8 @@ class App:
                 j.update(error=f"{type(e).__name__}: {e}")
             finally:
                 j.update(running=False, at=time.time())
-                self.explore_cache = {k: v for k, v in self.explore_cache.items() if k[:2] != ("report", year)}
+                self.explore_cache = {k: v for k, v in self.explore_cache.items()
+                                      if k[:2] not in (("report", year), ("corners", year))}
         threading.Thread(target=run, name=f"compile-{year}", daemon=True).start()
         return self.dataset_status(q)
 
@@ -1192,6 +1194,21 @@ class App:
         if not hit or hit[0] < (st.get("compiled_at") or 0):
             hit = self.explore_cache[key] = (time.time(), seasonreport.report(year, upto))
         return dict(hit[1], spoiler_hidden=upto is not None, job=self._job(year))
+
+    def corners(self, q):
+        """Per-corner telemetry of one session, and team-mates' styles across the season. Spoiler mode: nothing from
+        the meeting you're replaying or watching delayed, or after it."""
+        from . import cornerreport, seasonreport
+        year = self._report_year(q)
+        hide = self.feed.hidden_meeting()
+        upto = seasonreport.round_before(year, hide) if hide else None
+        num = lambda k: int(q[k]) if str(q.get(k, "")).isdigit() else None
+        key = ("corners", year, upto, num("session"), num("a"), num("b"))
+        hit = self.explore_cache.get(key)
+        st = seasonreport.status(year)
+        if not hit or hit[0] < (st.get("compiled_at") or 0):
+            hit = self.explore_cache[key] = (time.time(), cornerreport.report(year, num("session"), num("a"), num("b"), upto))
+        return dict(hit[1], spoiler_hidden=upto is not None, job=self._job(year), status=st)
 
     # ---------------------------------------------------------------- home and season
     def home(self, q):
@@ -1294,6 +1311,7 @@ ROUTES = {
     "/api/stats": App.stats, "/api/home": App.home, "/api/season": App.season,
     "/api/dataset": App.dataset_status, "/api/dataset/compile": App.dataset_compile,
     "/api/season-report": App.season_report,
+    "/api/corners": App.corners,
     "/api/ff1/status": App.ff1_status, "/api/ff1/login": App.ff1_login,
     "/api/ff1/recordings": App.ff1_recordings, "/api/ff1/record": App.ff1_record,
     "/api/recordings": App.recordings, "/api/recordings/latency": App.latency,

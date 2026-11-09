@@ -1042,6 +1042,9 @@
   .srsec { margin: 26px 0 12px; padding-top: 14px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
   .srsec b { display: block; color: var(--text); font-size: 17px; margin-bottom: 3px; }
   #x-report h2 select { font-size: 13px; }
+  .cnbar { position: relative; height: 10px; background: var(--panel2); border-radius: 5px; }
+  .cnbar i { position: absolute; top: 0; height: 100%; border-radius: 5px; }
+  .cnbar b { position: absolute; left: 50%; top: -2px; width: 1px; height: 14px; background: var(--muted); }
   #x-report tbody tr.on td { background: #1f2430; }
   #x-report th.click { cursor: pointer; } #x-report th.on { color: var(--text); }
   #x-report td .ico { width: 13px; height: 13px; vertical-align: -2px; }

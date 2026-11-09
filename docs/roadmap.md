@@ -58,15 +58,21 @@ Explore > Season report in the dashboard (`#explore/report`), built purely on th
 - Track temperature is not a term: within a race it moves with the lap number, so it can't be separated from
   fuel. Its link with degradation is shown across races instead.
 
-## Phase 4 - Circuit model and per-corner telemetry
+## Phase 4 - Circuit model and per-corner telemetry (done)
 
-- Build a reference line for each circuit from fastest laps and split it into corners and straights
-  automatically (speed minima, braking zones, full-throttle stretches).
-- Opt-in telemetry compilation (car data and location for every lap is millions of rows per race).
-- Per driver, per corner: braking point, peak braking, minimum speed, throttle pick-up, consistency
-  (lap-to-lap spread) and mistakes (lock-ups, off-line moments).
-- Driving-style comparison, especially between team-mates in the same car.
-- Lift-and-coast and tyre-management detection.
+`python3 -m f1hub compile 2025 --telemetry [all]`, and Explore > Corners. See [telemetry.md](telemetry.md).
+
+- Opt-in: every car's telemetry for each session, kept raw (gzipped) beside the dataset so it can be measured
+  again offline; only the measurements go into the dataset.
+- A reference line for each circuit from the session's fastest lap, split into corners automatically (speed dips,
+  chicanes merged) and named after the official corner numbers; slow, medium and fast corners.
+- Per driver, per corner, every lap: braking point, peak braking, entry, minimum and exit speed, throttle pick-up,
+  gear, and time through the corner (corner times add up to the lap).
+- Who is quickest in each corner, time lost in slow, medium and fast corners, top speed.
+- Two drivers side by side on a map and corner by corner; team-mates' styles across the season with 95% intervals.
+- Races: lift and coast per lap and through the race, consistency (lap-to-lap spread of corner times) and big
+  moments.
+- Still to do: lock-ups (no wheel-speed data), practice sessions.
 
 ## Phase 5 - Car characteristics and energy (2026 rules)
 

@@ -9,6 +9,8 @@ python3 -m f1hub compile 2025 --practice        # practice sessions too
 python3 -m f1hub compile 2025 --csv out/2025    # also every table as CSV
 python3 -m f1hub compile 2025 --refresh         # compile again sessions already in the file
 python3 -m f1hub compile 2025 --out my.sqlite   # somewhere else
+python3 -m f1hub compile 2025 --telemetry       # also measure every corner from car telemetry (telemetry.md)
+python3 -m f1hub compile 2025 --round 20-24     # only these rounds
 ```
 
 - Only finished sessions are compiled. A session's results count as final four days after it ends; until then
@@ -115,6 +117,11 @@ Use `WHERE on_track = 1` for overtaking counts. It leaves out:
 
 That leaves 6 passes at Monaco and 61 in Bahrain for 2025. It is a heuristic: a real pass re-taken within 10
 seconds is not counted.
+
+### tel_sessions, tel_corners, tel_corner_laps, tel_laps
+Per-corner telemetry, added with `compile --telemetry`: the corners of each circuit and every corner of every lap
+measured (braking point, minimum speed, throttle, time through it), plus top speed and lift-and-coast per lap.
+See [telemetry.md](telemetry.md).
 
 ### positions, intervals
 Races and sprints, the raw time series: every position change, and the gaps about every four seconds

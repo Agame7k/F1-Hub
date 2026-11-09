@@ -9,6 +9,7 @@
     python3 -m f1hub h2h
     python3 -m f1hub export results.json
     python3 -m f1hub compile 2025         the whole season as one SQLite dataset (add --csv DIR for CSV files)
+    python3 -m f1hub compile 2025 --telemetry     ... with every corner measured from telemetry (qualifying)
     python3 -m f1hub model 2025           the lap-time model: corrected race pace, degradation, fuel, dirty air
     python3 -m f1hub live                 live timing for the session running now (paid OpenF1 login)
     python3 -m f1hub gui                  live dashboard in your browser (http://localhost:8765)
@@ -144,13 +145,18 @@ def cmd_compile(args):
     def progress(msg):
         print(dim(f"  {msg}...".ljust(70)[:70]), end="\r", file=sys.stderr, flush=True)
     t0 = datetime.now()
-    path, summary = dataset.compile_season(year, kinds, args.out, args.refresh, progress)
+    tel = {"quali": ("quali",), "race": ("race",), "all": ("quali", "race")}.get(args.telemetry, ())
+    rounds = _rounds(args.round) if args.round else None
+    path, summary = dataset.compile_season(year, kinds, args.out, args.refresh, progress, telemetry=tel, rounds=rounds)
     print(" " * 70, end="\r", file=sys.stderr)
     laps = sum(n for _, n in summary["compiled"])
     print(c(f"\n  {year} season dataset", "E10600", bold=True) + dim(f"  {path}"))
     print(f"  {len(summary['compiled'])} sessions compiled ({laps} laps) in "
           f"{(datetime.now() - t0).total_seconds():.0f}s, {len(summary['skipped'])} already up to date, "
           f"{len(summary['pending'])} not run yet")
+    if summary["telemetry"]:
+        print(f"  Telemetry measured for {len(summary['telemetry'])} sessions "
+              f"({sum(n for _, n in summary['telemetry'])} laps)")
     for label, why in summary["failed"]:
         print(c(f"  Could not compile {label}: {why}", "FFB000"))
     db = dataset.connect(path)
@@ -225,6 +231,15 @@ def cmd_model(args):
             for t in m["dirty_teams"]:
                 print(f"    {t['est']:+.2f}s ± {1.96 * t['se']:.2f}  {t['team']}" + dim(f"  ({t['laps']} laps)"))
     return 0
+
+
+def _rounds(spec):
+    """'24', '20-24' or '1,5,9' -> a set of round numbers."""
+    out = set()
+    for part in spec.split(","):
+        a, _, b = part.partition("-")
+        out.update(range(int(a), int(b or a) + 1))
+    return out
 
 
 # --------------------------------------------------------------------------- interactive
@@ -309,6 +324,9 @@ def main(argv=None):
     co.add_argument("--refresh", action="store_true", help="compile again sessions already in the dataset")
     co.add_argument("--out", help="the SQLite file (default: .f1data/season_YEAR.sqlite)")
     co.add_argument("--csv", metavar="DIR", help="also write every table as a CSV file in DIR")
+    co.add_argument("--telemetry", nargs="?", const="quali", choices=("quali", "race", "all"),
+                    help="also measure every corner from car telemetry (qualifying by default; minutes a session)")
+    co.add_argument("--round", metavar="N", help="only these rounds: 24, 20-24 or 1,5,9")
     mo = sub.add_parser("model", help="the lap-time model for a compiled season")
     mo.add_argument("season", nargs="?", type=int, help="the year (default: --year)")
     mo.add_argument("--round", type=int, help="one race in detail, with every driver's corrected pace")

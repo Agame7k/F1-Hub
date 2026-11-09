@@ -400,6 +400,7 @@
     <button data-x="lab"><svg class="ico" aria-hidden="true"><use href="#i-activity"/></svg>Telemetry lab</button>
     <button data-x="stats"><svg class="ico" aria-hidden="true"><use href="#i-trend"/></svg>Season stats</button>
     <button data-x="report"><svg class="ico" aria-hidden="true"><use href="#i-chart"/></svg>Season report</button>
+    <button data-x="corners"><svg class="ico" aria-hidden="true"><use href="#i-activity"/></svg>Corners</button>
     <button data-x="circuit"><svg class="ico" aria-hidden="true"><use href="#i-map"/></svg>Circuit preview</button>
     <button data-x="ff1"><svg class="ico" aria-hidden="true"><use href="#i-rec"/></svg>FastF1 &amp; recordings</button>
     <span class="xnote" id="xff1chip"></span>
@@ -428,6 +429,10 @@
       <span class="xnote" id="srStatus"></span></div>
     <div id="srOut"></div>
   </section>
+  <section id="x-corners" class="hidden">
+    <div class="xpick"><select id="cnYear" onchange="cnLoad()"></select><span id="cnStatus" class="muted"></span></div>
+    <div id="cnOut"></div>
+  </section>
   <section id="x-circuit" class="hidden">
     <div class="xpick"><select id="xcmeet" onchange="xCircuit()"></select><span class="xnote" id="xcnote"></span></div>
     <div id="xcircuit"></div>
@@ -451,6 +456,7 @@
 <script src="/static/explore.js"></script>
 <script src="/static/seasonreport.js"></script>
 <script src="/static/lapmodel.js"></script>
+<script src="/static/corners.js"></script>
 <script src="/static/home.js"></script>
 <script src="/static/status.js"></script>
 <script src="/static/polish.js"></script>
