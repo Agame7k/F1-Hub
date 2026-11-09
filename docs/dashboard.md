@@ -229,7 +229,7 @@ Press `?` on the dashboard for the list.
 
 Your tab is remembered and is in the URL (`#map`, `#radio`, …), so you can bookmark a view.
 
-Each tab keeps its own scroll position, and the tab bar stays at the top of the window as you scroll. Animations follow your system's reduced-motion setting.
+Each tab keeps its own scroll position, and the tab bar stays at the top of the window as you scroll. Charts draw themselves in when they first appear: lines from left to right, bars from their baseline, dots in turn, with headline figures counting up and table rows arriving in quick succession. Panels further down wait until you scroll to them. It plays when you open a tab or view or pick something else in a dropdown, never on a live refresh. Animations follow your system's reduced-motion setting.
 
 ## Server safety and resilience
 

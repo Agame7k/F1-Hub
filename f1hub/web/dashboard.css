@@ -1062,3 +1062,10 @@
   .swci i { position: absolute; top: 3px; height: 6px; background: #3987e5; opacity: .45; border-radius: 3px; }
   .swci b { position: absolute; top: 0; width: 3px; height: 12px; margin-left: -1px; background: #3987e5; border-radius: 1px; }
   @media (max-width: 700px) { .swpair { grid-template-columns: 1fr; } }
+
+  /* motion for the data (motion.js): a panel further down waits, unseen, until it is scrolled to; chart marks
+     with their own tooltip brighten under the pointer */
+  .card.mo-wait { opacity: 0; }
+  svg :is(rect, circle, path, polyline):has(> title) { transition: filter var(--fast) ease; }
+  svg :is(rect, circle, path, polyline):has(> title):hover { filter: brightness(1.35) drop-shadow(0 0 4px #ffffff22); }
+  @media (prefers-reduced-motion: reduce) { .card.mo-wait { opacity: 1; } }
