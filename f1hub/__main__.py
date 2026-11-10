@@ -143,14 +143,16 @@ def cmd_compile(args):
     kinds = dataset.DEFAULT_KINDS + (("practice",) if args.practice else ())
     year = args.season or args.year
 
-    def progress(msg):
-        print(dim(f"  {msg}...".ljust(70)[:70]), end="\r", file=sys.stderr, flush=True)
+    from .progress import Reporter
+    progress = Reporter(sys.stderr, style=dim)
     t0 = datetime.now()
     tel = {"quali": ("quali",), "race": ("race",), "all": ("quali", "race")}.get(args.telemetry, ())
     rounds = _rounds(args.round) if args.round else None
-    path, summary = dataset.compile_season(year, kinds, args.out, args.refresh, progress, telemetry=tel, rounds=rounds,
-                                           stewards=args.stewards, radio=args.radio)
-    print(" " * 70, end="\r", file=sys.stderr)
+    try:
+        path, summary = dataset.compile_season(year, kinds, args.out, args.refresh, progress, telemetry=tel,
+                                               rounds=rounds, stewards=args.stewards, radio=args.radio)
+    finally:
+        progress.close()
     laps = sum(n for _, n in summary["compiled"])
     print(c(f"\n  {year} season dataset", "E10600", bold=True) + dim(f"  {path}"))
     print(f"  {len(summary['compiled'])} sessions compiled ({laps} laps) in "

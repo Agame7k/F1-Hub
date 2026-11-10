@@ -19,6 +19,7 @@ from pathlib import Path
 from statistics import median
 
 from . import api
+from . import progress as prog
 from .analysis import WET_COMPOUNDS, Source, _drivers, _overlaps, _ts
 from .quali import _is_deleted, deleted_laps
 from .racecontrol import neutral_periods
@@ -509,6 +510,7 @@ def compile_season(year, kinds=DEFAULT_KINDS, path=None, refresh=False, progress
                "radio": None}
     try:
         final = {k for (k,) in db.execute("SELECT session_key FROM sessions WHERE final = 1")}
+        todo = []
         for rnd in season.rounds:
             if rnd.cancelled or (rounds and rnd.number not in rounds):
                 continue
@@ -518,23 +520,28 @@ def compile_season(year, kinds=DEFAULT_KINDS, path=None, refresh=False, progress
                 label = f"R{rnd.number} {rnd.name} - {name}"
                 if not _session_over(s):
                     summary["pending"].append(label)
-                    continue
-                if s["session_key"] in final and not refresh:
+                elif s["session_key"] in final and not refresh:
                     summary["skipped"].append(label)
-                    continue
-                progress(label)
-                try:
-                    n = compile_session(db, s, rnd, year)
-                except api.LiveSessionLock:
-                    db.rollback()
-                    raise
-                except (api.APIError, KeyError, TypeError, ValueError) as e:
-                    db.rollback()
-                    log.warning("could not compile %s: %s", label, e)
-                    summary["failed"].append((label, str(e).splitlines()[0] if str(e) else type(e).__name__))
-                    continue
-                db.commit()
-                summary["compiled"].append((label, n))
+                else:
+                    todo.append((rnd, s, label))
+        prog.begin(progress, "sessions", len(todo))
+        for rnd, s, label in todo:
+            progress(label)
+            try:
+                n = compile_session(db, s, rnd, year)
+            except api.LiveSessionLock:
+                db.rollback()
+                raise
+            except (api.APIError, KeyError, TypeError, ValueError) as e:
+                db.rollback()
+                log.warning("could not compile %s: %s", label, e)
+                why = str(e).splitlines()[0] if str(e) else type(e).__name__
+                summary["failed"].append((label, why))
+                prog.done(progress, label, f"FAILED: {why}")
+                continue
+            db.commit()
+            summary["compiled"].append((label, n))
+            prog.done(progress, label, f"{n} laps")
         if telemetry:
             _compile_telemetry(db, path, telemetry, rounds, refresh, summary, progress)
         if stewards:
@@ -581,9 +588,9 @@ def _compile_telemetry(db, path, kinds, rounds, refresh, summary, progress):
         sessions = db.execute(f"SELECT * FROM sessions WHERE session_name IN ({marks}) ORDER BY date_start", names).fetchall()
     finally:
         db.row_factory = None
-    for s in sessions:
-        if (rounds and s["round"] not in rounds) or (s["session_key"] in done and not refresh):
-            continue
+    todo = [s for s in sessions if not ((rounds and s["round"] not in rounds) or (s["session_key"] in done and not refresh))]
+    prog.begin(progress, "telemetry", len(todo))
+    for s in todo:
         label = f"R{s['round']} {s['meeting_name']} - {s['session_name']}"
         try:
             n = telemetry.compile_session(db, s, path.parent, lambda m: progress(f"{label}: {m}"))
@@ -593,11 +600,14 @@ def _compile_telemetry(db, path, kinds, rounds, refresh, summary, progress):
         except (api.APIError, KeyError, TypeError, ValueError, OSError) as e:
             db.rollback()
             log.warning("could not measure the telemetry of %s: %s", label, e)
-            summary["failed"].append((f"{label} telemetry", str(e).splitlines()[0] if str(e) else type(e).__name__))
+            why = str(e).splitlines()[0] if str(e) else type(e).__name__
+            summary["failed"].append((f"{label} telemetry", why))
+            prog.done(progress, label, f"FAILED: {why}")
             continue
         db.execute("INSERT OR REPLACE INTO meta VALUES (?, ?)", (f"tel_v:{s['session_key']}", str(telemetry.VERSION)))
         db.commit()
         summary["telemetry"].append((label, n))
+        prog.done(progress, label, f"{n} laps measured")
 
 
 # ------------------------------------------------------------------------------------------------ reading it back

@@ -14,6 +14,7 @@ from collections import Counter
 from statistics import median
 
 from . import api, radio, transcribe
+from . import progress as prog
 from .api import write_atomic
 
 # what a message is about: (key, label, pattern). A message can be several.
@@ -118,11 +119,11 @@ def compile_season(db, rounds=None, refresh=False, progress=lambda m: None):
     done = {r[0] for r in db.execute("SELECT session_key FROM radio_sessions WHERE transcribed >= clips")}
     worker = _Worker()
     n_races = n_clips = n_text = 0
+    races = [s for s in races if not ((rounds and s["round"] not in rounds) or (s["session_key"] in done and not refresh))]
+    prog.begin(progress, "team radio", len(races))
     try:
         for s in races:
             key = s["session_key"]
-            if (rounds and s["round"] not in rounds) or (key in done and not refresh):
-                continue
             label = f"R{s['round']} {s['meeting_name']}"
             progress(f"{label}: team radio")
             clips = api.get("team_radio", session_key=key) or []
@@ -151,6 +152,7 @@ def compile_season(db, rounds=None, refresh=False, progress=lambda m: None):
             n_races += 1
             n_clips += len(rows)
             n_text += got
+            prog.done(progress, label, f"{len(rows)} clips, {got} transcribed")
     finally:
         worker.close()
     return n_races, n_clips, n_text

@@ -404,7 +404,7 @@ def _official_corners(session_key, db):
     return [(c["number"], c["x"], c["y"]) for c in (info or {}).get("corners") or []]
 
 
-def analyse_session(db, session_key, raw, official=None):
+def analyse_session(db, session_key, raw, official=None, progress=lambda msg: None):
     """Measure every lap of a session from its raw telemetry ({driver: columns}) and write the tel_ tables.
     official: [(number, x, y)] corner positions (None: look them up). Returns the number of laps measured."""
     laps = db.execute("""SELECT driver_number, lap_number, date_start, lap_time, pit_out, pit_in FROM laps
@@ -452,7 +452,9 @@ def analyse_session(db, session_key, raw, official=None):
                    (session_key, st["straight"], st["label"], round(st["start"], 1), round(st["end"], 1),
                     round(st["end"] - st["start"], 1), st["top_speed"], int(st["end"] > line.length)))
     measured = 0
-    for n, lap, start, lt, po, pi in laps:
+    for i, (n, lap, start, lt, po, pi) in enumerate(laps):
+        if i % 10 == 0:
+            progress(f"measuring corners, lap {i + 1}/{len(laps)}")
         if n not in raw:
             continue
         s = lap_samples(raw[n], _ts(start), lt)
@@ -486,4 +488,4 @@ def compile_session(db, session, data_dir, progress=lambda msg: None):
     drivers = [r[0] for r in db.execute("SELECT driver_number FROM drivers WHERE session_key = ?", (session["session_key"],))]
     raw = fetch_session(session, drivers, data_dir, progress)
     progress("measuring corners")
-    return analyse_session(db, session["session_key"], {n: c for n, c in raw.items() if c["car"]["t"]})
+    return analyse_session(db, session["session_key"], {n: c for n, c in raw.items() if c["car"]["t"]}, progress=progress)

@@ -13,6 +13,7 @@ import time
 from collections import Counter
 
 from . import fia
+from . import progress as prog
 from .stewards import SKIP_TITLE
 
 FINAL_KINDS = ("infringement", "decision", "offence")
@@ -155,11 +156,9 @@ def compile_season(db, year, rounds=None, refresh=False, progress=lambda m: None
                              GROUP BY round, meeting_key ORDER BY round""").fetchall()
     done = {r[0] for r in db.execute("SELECT meeting_key FROM stew_events WHERE final = 1")}
     events = decisions = 0
+    meetings = [m for m in meetings if not ((rounds and m["round"] not in rounds) or (m["meeting_key"] in done and not refresh))]
+    prog.begin(progress, "stewards", len(meetings))
     for m in meetings:
-        if rounds and m["round"] not in rounds:
-            continue
-        if m["meeting_key"] in done and not refresh:
-            continue
         label = f"R{m['round']} {m['meeting_name']}"
         progress(f"{label}: stewards' documents")
         docs = fia.event_documents(year, m["meeting_name"], ttl=None if _settled(m["last"]) else 600)
@@ -192,6 +191,7 @@ def compile_season(db, year, rounds=None, refresh=False, progress=lambda m: None
         db.commit()
         events += 1
         decisions += len(rows)
+        prog.done(progress, label, f"{len(rows)} decisions")
     return events, decisions
 
 
