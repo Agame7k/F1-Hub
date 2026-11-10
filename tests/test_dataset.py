@@ -195,6 +195,36 @@ class Dataset(unittest.TestCase):
         q = self.db.execute(f"SELECT q1, q2, q3 FROM results WHERE session_key = {QUALI} AND driver_number = 44").fetchone()
         self.assertEqual(tuple(q), (80.1, 79.5, 79.0))
 
+    def test_position_code_instead_of_number(self):
+        # OpenF1 sends 'RT' as the position of a car that retired in qualifying without a time
+        rt = {"driver_number": 1, "position": "RT", "duration": [None, None, None], "gap_to_leader": [None, None, None],
+              "dnf": False, "dns": False, "dsq": False}
+        rows = dict(QUALI_ROWS, session_result=[QUALI_ROWS["session_result"][0], rt])
+        class Retired(FakeSource):
+            def __init__(self, key):
+                super().__init__(key)
+                if self.key == QUALI:
+                    self.rows = rows
+
+        with mock.patch.object(dataset, "Source", Retired):
+            _, summary = dataset.compile_season(2025, path=self.path, refresh=True)
+        self.assertEqual(summary["failed"], [])
+        q = self.db.execute(f"SELECT position, status FROM results WHERE session_key = {QUALI} AND driver_number = 1").fetchone()
+        self.assertEqual(tuple(q), (None, "DNF"))
+        grid = self.db.execute(f"SELECT grid FROM results WHERE session_key = {RACE} AND driver_number = 1").fetchone()[0]
+        self.assertIsNone(grid)
+
+    def test_position_codes_already_stored_are_repaired(self):
+        self.db.execute(f"UPDATE results SET position = 'RT' WHERE session_key = {QUALI} AND driver_number = 1")
+        self.db.execute(f"UPDATE results SET grid = 'RT' WHERE session_key = {RACE} AND driver_number = 1")
+        self.db.execute(f"UPDATE results SET grid = '1' WHERE session_key = {RACE} AND driver_number = 44")
+        self.db.commit()
+        dataset.connect(self.path).close()
+        rows = {(r["session_key"], r["driver_number"]): r for r in self.db.execute("SELECT * FROM results")}
+        self.assertEqual((rows[QUALI, 1]["position"], rows[QUALI, 1]["status"]), (None, "DNF"))
+        self.assertEqual((rows[RACE, 1]["grid"], rows[RACE, 1]["grid_source"]), (None, None))
+        self.assertEqual(rows[RACE, 44]["grid"], 1)
+
     def test_final_sessions_are_skipped_next_time(self):
         FakeSource.fetched = []
         _, summary = dataset.compile_season(2025, path=self.path)

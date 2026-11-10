@@ -222,10 +222,12 @@ def racecraft(db, upto, teams):
         if r["status"] == "DNS":
             continue
         e["starts"] += 1
-        if r["session_key"] in races and r["grid"] and r["lap1"]:
-            e["lap1"].append(r["grid"] - r["lap1"])
-        if r["session_key"] in races and r["grid"] and r["status"] == "Finished" and r["position"]:
-            e["gained"].append(r["grid"] - r["position"])
+        # older datasets can hold OpenF1 codes such as 'RT' here: only whole numbers count
+        grid, lap1, pos = (v if isinstance(v, int) else None for v in (r["grid"], r["lap1"], r["position"]))
+        if r["session_key"] in races and grid and lap1:
+            e["lap1"].append(grid - lap1)
+        if r["session_key"] in races and grid and r["status"] == "Finished" and pos:
+            e["gained"].append(grid - pos)
     for r in db.execute(f"SELECT session_key, overtaking, overtaken FROM overtakes WHERE on_track = 1 "
                         f"AND session_key IN ({marks})", keys):
         row(r["session_key"], r["overtaking"])["made"] += 1

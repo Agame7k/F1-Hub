@@ -138,6 +138,24 @@ def default_path(year):
     return DATA_DIR / f"season_{year}.sqlite"
 
 
+def _repair_positions(db):
+    """Datasets compiled before _pos() existed can hold OpenF1 codes such as 'RT' in results.position (and, via the
+    qualifying-order fallback, in results.grid). Final sessions are never recompiled, so clean them in place."""
+    if not db.execute("SELECT 1 FROM results WHERE typeof(position) = 'text' OR typeof(grid) = 'text' LIMIT 1").fetchone():
+        return
+    db.executescript("""
+        UPDATE results SET status = 'DNF' WHERE typeof(position) = 'text' AND upper(trim(position)) = 'RT'
+            AND status = 'Finished';
+        UPDATE results SET position = CAST(position AS INTEGER) WHERE typeof(position) = 'text'
+            AND trim(position) GLOB '[0-9]*' AND trim(position) NOT GLOB '*[^0-9]*';
+        UPDATE results SET position = NULL WHERE typeof(position) = 'text';
+        UPDATE results SET grid = CAST(grid AS INTEGER) WHERE typeof(grid) = 'text'
+            AND trim(grid) GLOB '[0-9]*' AND trim(grid) NOT GLOB '*[^0-9]*';
+        UPDATE results SET grid = NULL, grid_source = NULL WHERE typeof(grid) = 'text';
+    """)
+    db.commit()
+
+
 def connect(path):
     """Open (and if needed create) a dataset. One built with an older schema is rebuilt from scratch."""
     path = Path(path)
@@ -149,6 +167,7 @@ def connect(path):
         version = None
     if version and version[0] == str(SCHEMA_VERSION):
         db.executescript(TEL_SCHEMA + EXTRA_SCHEMA)
+        _repair_positions(db)
         return db
     db.close()
     if path.exists():
@@ -175,9 +194,21 @@ def _flag(v):
     return None if v is None else int(bool(v))
 
 
+def _pos(v):
+    """A classified position as an int, or None: OpenF1 sometimes sends a code such as 'RT' (retired) instead."""
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, int):
+        return v
+    if isinstance(v, str) and v.strip().isdigit():
+        return int(v)
+    return None
+
+
 def _status(r):
+    pos = r.get("position")
     return "DSQ" if r.get("dsq") else "DNS" if r.get("dns") else "DNF" if r.get("dnf") else \
-        "Finished" if r.get("position") else None
+        "Finished" if _pos(pos) else "DNF" if isinstance(pos, str) and pos.strip().upper() == "RT" else None
 
 
 class _Log:
@@ -378,14 +409,14 @@ def _insert(db, table, rows):
 def _grid(src, rnd, session):
     """{number: grid slot} and where it came from: OpenF1's starting grid, or the qualifying order when that's
     missing (it often is): penalties are then not applied."""
-    grid = {g["driver_number"]: g.get("position") for g in src.get("starting_grid") if g.get("position")}
+    grid = {g["driver_number"]: _pos(g.get("position")) for g in src.get("starting_grid") if _pos(g.get("position"))}
     if grid:
         return grid, "official"
     for name in GRID_FROM.get(session["session_name"], ()):
         q = rnd.sessions.get(name)
         if q:
             rows = Source(q["session_key"]).get("session_result")
-            return {r["driver_number"]: r["position"] for r in rows if r.get("position")}, "qualifying"
+            return {r["driver_number"]: _pos(r.get("position")) for r in rows if _pos(r.get("position"))}, "qualifying"
     return {}, None
 
 
@@ -424,7 +455,7 @@ def compile_session(db, session, rnd, year):
     for r in results:
         dur, gap = r.get("duration"), r.get("gap_to_leader")
         qs = dur if isinstance(dur, list) else []
-        res.append({"session_key": key, "driver_number": r["driver_number"], "position": r.get("position"),
+        res.append({"session_key": key, "driver_number": r["driver_number"], "position": _pos(r.get("position")),
                     "status": _status(r), "points": _num(r.get("points")), "laps": r.get("number_of_laps"),
                     "duration": None if qs else _num(dur), "gap_to_leader": None if isinstance(gap, list) else _num(gap),
                     "laps_down": _laps_down(gap), "q1": _num(qs[0]) if len(qs) > 0 else None,
