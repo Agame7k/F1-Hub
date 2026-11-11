@@ -126,6 +126,28 @@ class Reporter(unittest.TestCase):
         r.close()
         self.assertIsNotNone(r.pace.get("sessions"))      # the run's pace is kept for next time
 
+    def test_step_and_whole_job_eta(self):
+        pace = progress.Pace(rate=1.0)
+        pace.data = {"sessions": {"o": 0, "s": 1.0, "n": 5}, "telemetry": {"o": 60, "s": 1.0, "n": 5}}
+        steps = [("sessions", 2, 10), ("telemetry", 3, 30), ("stewards", 0, None)]
+        r = progress.Reporter(io.StringIO(), tick=0, requests=Requests(), pace=pace, steps=steps)
+        progress.begin(r, "sessions", 2, [5, 5])
+        status = r.status()
+        self.assertIn("step 1/2 sessions 1/2", status)                 # a step with nothing to do isn't counted
+        self.assertIn("ETA ~10s", status)
+        self.assertIn("all ~3m40s", status)                            # 10 s + telemetry: 3 x 60 s + 30 requests
+        progress.begin(r, "telemetry", 3, [10, 10, 10])
+        self.assertIn("step 2/2 telemetry", r.status())
+        self.assertIn("all ~3m30s", r.status())
+        r.close()
+
+    def test_untimed_steps_make_the_whole_job_a_lower_bound(self):
+        steps = [("sessions", 1, 4), ("team radio", 2, None)]
+        r = progress.Reporter(io.StringIO(), tick=0, requests=Requests(), steps=steps)
+        progress.begin(r, "sessions", 1, [4])
+        self.assertIn("all >=4s", r.status())
+        r.close()
+
     def test_steps_without_requests_are_timed_too(self):
         r = progress.Reporter(io.StringIO(), tick=0, requests=Requests())
         progress.begin(r, "stewards", 2)

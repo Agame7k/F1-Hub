@@ -147,12 +147,13 @@ def _print_plan(year, plan, pace):
     print(c(f"\n  {year} compile plan", "E10600", bold=True))
     unit = {"sessions": "sessions", "telemetry": "sessions", "stewards": "Grands Prix", "team radio": "races"}
     note = {"stewards": "fia.com, a few PDFs a minute", "team radio": "Whisper, an hour or more a season"}
-    total, untimed, work = 0.0, [], False
+    total, untimed, work = 0.0, [], 0
+    steps = sum(1 for _, n, _ in plan["phases"] if n)
     for phase, n, req in plan["phases"]:
         if not n:
-            print(f"    {phase:11s} {n:4d} {unit.get(phase, ''):12s} " + dim("nothing to do"))
+            print(f"       {phase:11s} {n:4d} {unit.get(phase, ''):12s} " + dim("nothing to do"))
             continue
-        work = True
+        work += 1
         t, known = pace.estimate(phase, n, req or 0)
         if not known:
             untimed.append(phase)
@@ -161,8 +162,10 @@ def _print_plan(year, plan, pace):
         else:
             total += t
             what = (f"{req:,} requests  " if req is not None else "") + dim(f"{'~' if known else '>='}{fmt_duration(t)}")
-        print(f"    {phase:11s} {n:4d} {unit.get(phase, ''):12s} {what}")
+        print(f"    {work}. {phase:11s} {n:4d} {unit.get(phase, ''):12s} {what}")
     print(dim(f"    {len(plan['skipped'])} sessions already up to date, {len(plan['pending'])} not run yet"))
+    if steps > 1:
+        print(dim(f"    the {steps} steps run in this order, each using what the ones before it built"))
     if work:
         print(f"  {'~' if not untimed else 'at least '}{fmt_duration(total)}" + dim(
             f"  (not timed yet: {', '.join(untimed)} - a compile keeps each step's real pace for next time)"
@@ -187,7 +190,7 @@ def cmd_compile(args):
         return 0
     print()
 
-    progress = Reporter(sys.stderr, style=dim, requests=api.request_count, pace=pace)
+    progress = Reporter(sys.stderr, style=dim, requests=api.request_count, pace=pace, steps=plan["phases"])
     t0 = datetime.now()
     try:
         path, summary = dataset.compile_season(year, kinds, args.out, args.refresh, progress, telemetry=tel,

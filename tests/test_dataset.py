@@ -277,6 +277,12 @@ class Dataset(unittest.TestCase):
             plan = dataset.plan_season(2025, path=self.path, refresh=True, telemetry=("quali", "race"))
             self.assertEqual(plan["phases"], [("sessions", 2, 20), ("telemetry", 2, 6)])
 
+    def test_telemetry_requests_from_a_dataset_row(self):
+        # the compile passes sqlite3.Row sessions (no .get) - the plan passes dicts
+        row = self.db.execute("SELECT * FROM sessions WHERE session_key = ?", (RACE,)).fetchone()
+        with mock.patch.object(api, "offline", False):
+            self.assertEqual(dataset._telemetry_requests(self.db, self.path, row), 2 * 2 + 1)
+
     def test_settled_session_details_are_kept_for_good(self):
         from f1hub import analysis
         old = {"session_key": 1, "meeting_key": 7, "date_end": "2025-03-16T06:00:00+00:00"}

@@ -186,11 +186,15 @@ class Reporter:
     """Renders progress to a terminal: a live status line (redrawn every second, so the clock keeps moving through
     a long step) and a permanent line per finished unit. Off a terminal, only the permanent lines are written."""
 
-    def __init__(self, stream=sys.stderr, style=lambda s: s, tick=1.0, requests=None, pace=None):
+    def __init__(self, stream=sys.stderr, style=lambda s: s, tick=1.0, requests=None, pace=None, steps=()):
         """requests: () -> requests sent so far (api.request_count), which lets a phase's ETA count requests;
-        pace: a Pace - earlier compiles' figures to start from, and where this run's are kept."""
+        pace: a Pace - earlier compiles' figures to start from, and where this run's are kept;
+        steps: the whole job's phases in order, [(phase, units, requests or None)] - the status line then shows
+        which step of how many is running, and an ETA for the whole job."""
         self.stream, self.style = stream, style
         self.requests, self.pace = requests, pace or Pace()
+        self.steps = [st for st in steps if st[1]]
+        self.begun = set()
         self.live = stream.isatty()
         self.t0 = time.monotonic()
         self.phase = None
@@ -218,6 +222,7 @@ class Reporter:
         with self.lock:
             self._end_phase()
             self.msg = ""
+            self.begun.add(phase)
             self.phase = Phase(phase, total, work, self.pace.rate, self.requests, self.pace.get(phase)) if total else None
             if total:
                 need = f", {sum(work):,} requests" if work is not None and self.phase.work is not None else ""
@@ -254,12 +259,31 @@ class Reporter:
         now = now or time.monotonic()
         bits = [fmt_duration(now - self.t0)]
         p = self.phase
+        eta = p.eta(now) if p else None
         if p:
-            eta = p.eta(now)
-            bits.insert(0, f"{p.name} {min(p.finished + 1, p.total)}/{p.total}")
+            names = [st[0] for st in self.steps]
+            step = f"step {names.index(p.name) + 1}/{len(names)} " if p.name in names else ""
+            bits.insert(0, f"{step}{p.name} {min(p.finished + 1, p.total)}/{p.total}")
             bits.append("ETA " + ("estimating" if eta is None else
                                   (">=" if p.bounded else "~") + fmt_duration(eta)))
+        total = self.total_eta(now, eta)
+        if total:
+            left, known = total
+            bits.append(f"all {'~' if known else '>='}{fmt_duration(left)}")
         return "[" + " | ".join(bits) + "] " + self.msg
+
+    def total_eta(self, now, eta=None):
+        """(seconds left in the whole job, known) - the running step's ETA plus the steps not begun yet, from
+        Pace - or None without steps. known is False when any part is only a lower bound or not timed yet."""
+        if not self.steps:
+            return None
+        p = self.phase
+        left, known = (eta or 0.0), bool(p is None or (eta is not None and not p.bounded))
+        for phase, units, requests in self.steps:
+            if phase not in self.begun:
+                t, k = self.pace.estimate(phase, units, requests or 0)
+                left, known = left + t, known and k
+        return left, known
 
     def _tick(self, every):
         while not self._stop.wait(every):

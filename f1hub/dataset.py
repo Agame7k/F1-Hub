@@ -648,7 +648,7 @@ def _telemetry_requests(db, path, session, seen=None):
     folder = tel.raw_dir(path.parent, key)
     missing = sum(not (folder / f"{n}.json.gz").exists() for n in drivers) if drivers else TYPICAL_DRIVERS
     seen = set() if seen is None else seen
-    url = api.request_url("meetings", meeting_key=session.get("meeting_key"))
+    url = api.request_url("meetings", meeting_key=session["meeting_key"])
     new = bool(url) and url not in seen
     seen.add(url)
     return 2 * missing + new
