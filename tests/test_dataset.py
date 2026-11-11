@@ -267,14 +267,28 @@ class Dataset(unittest.TestCase):
         self.assertEqual((plan["phases"], len(plan["skipped"])), ([("sessions", 0, 0)], 2))
         with mock.patch.object(api, "offline", False):
             plan = dataset.plan_season(2025, path=self.path, refresh=True, telemetry=("quali", "race"))
-            # quali: 7 endpoints, race: 11, each + sessions + meetings; telemetry: 2 drivers x 2 + meetings
-            self.assertEqual(plan["phases"], [("sessions", 2, 22), ("telemetry", 2, 10)])
+            # quali: 7 endpoints, race: 11, each + its details, + the meeting they share (once);
+            # telemetry: 2 drivers x 2 each (the meeting is fetched by then)
+            self.assertEqual(plan["phases"], [("sessions", 2, 21), ("telemetry", 2, 8)])
             api._write_cached(api._cache_path(api._build_url("laps", {"session_key": RACE})), "", [])
             raw = Path(self.tmp.name) / "telemetry" / str(RACE)
             raw.mkdir(parents=True)
             (raw / "1.json.gz").write_bytes(b"")
             plan = dataset.plan_season(2025, path=self.path, refresh=True, telemetry=("quali", "race"))
-            self.assertEqual(plan["phases"], [("sessions", 2, 21), ("telemetry", 2, 8)])
+            self.assertEqual(plan["phases"], [("sessions", 2, 20), ("telemetry", 2, 6)])
+
+    def test_settled_session_details_are_kept_for_good(self):
+        from f1hub import analysis
+        old = {"session_key": 1, "meeting_key": 7, "date_end": "2025-03-16T06:00:00+00:00"}
+        for endpoint, params, data in (("sessions", {"session_key": 1}, [old]), ("meetings", {"meeting_key": 7}, [{}])):
+            path = api._cache_path(api._build_url(endpoint, params))
+            api._write_cached(path, "", data)
+            path.write_text(path.read_text().replace('"fetched": ', '"fetched": 1e9, "x": '))   # fetched long ago
+        with mock.patch.object(api, "offline", False), \
+                mock.patch.object(api.urllib.request, "urlopen", side_effect=AssertionError("no request")):
+            src = analysis.Source(1)            # analysis.Source itself, not the fake
+            self.assertEqual(src.ttl, api.FOREVER)
+            self.assertEqual(dataset.session_requests(old), len(dataset.SESSION_ENDPOINTS))
 
     def test_old_schema_is_rebuilt(self):
         self.db.execute("UPDATE meta SET value = '0' WHERE key = 'schema_version'")

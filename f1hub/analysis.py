@@ -19,6 +19,31 @@ def _ts(s):
 
 
 # ------------------------------------------------------------------------------------------------ data source
+SETTLED = 4 * 86400        # s after a session ends before its data stops changing (results count as final)
+
+
+def settled(session):
+    """Whether a session ended long enough ago that nothing about it changes any more."""
+    end = _ts((session or {}).get("date_end"))
+    return bool(end) and datetime.now(timezone.utc).timestamp() - end > SETTLED
+
+
+def _details_ttl(session_key):
+    """How long a cached copy of a session's details lasts: for good once that copy shows the session settled."""
+    cached = api.peek("sessions", session_key=int(session_key))
+    return api.FOREVER if cached and settled(cached[0]) else 3600
+
+
+def session_reads(session, endpoints=()):
+    """What Source reads for a session (a dict with session_key, meeting_key, date_end), as [(endpoint, ttl,
+    params)] - to count a compile's requests before it starts. Kept in step with Source."""
+    key, final = int(session["session_key"]), settled(session)
+    ttl = api.FOREVER if final else 600
+    return ([("sessions", _details_ttl(key), {"session_key": key}),
+             ("meetings", api.FOREVER if final else 6 * 3600, {"meeting_key": session.get("meeting_key")})] +
+            [(e, ttl, {"session_key": key}) for e in endpoints])
+
+
 class Source:
     """Rows for one session, wherever they come from: OpenF1, or FastF1 (older seasons / OpenF1 locked)."""
 
@@ -30,13 +55,14 @@ class Source:
             st = ff1.store(key)
             self.session, self.meeting = st.session, st.meeting
             return
-        rows = api.get("sessions", ttl=3600, session_key=self.key)
+        rows = api.get("sessions", ttl=_details_ttl(self.key), session_key=self.key)
         if not rows:
             raise api.APIError(f"No session {key}")
         self.session = rows[0]
-        self.meeting = (api.get("meetings", ttl=6 * 3600, meeting_key=self.session["meeting_key"]) or [{}])[0]
-        end = _ts(self.session.get("date_end")) or 0
-        self.ttl = api.FOREVER if datetime.now(timezone.utc).timestamp() - end > 4 * 86400 else 600
+        final = settled(self.session)
+        self.meeting = (api.get("meetings", ttl=api.FOREVER if final else 6 * 3600,
+                                meeting_key=self.session["meeting_key"]) or [{}])[0]
+        self.ttl = api.FOREVER if final else 600
 
     def get(self, endpoint, **params):
         if self.fastf1:

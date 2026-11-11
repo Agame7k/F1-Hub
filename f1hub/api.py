@@ -215,10 +215,24 @@ def _build_url(endpoint, params):
 
 def is_cached(endpoint, ttl=FOREVER, **params):
     """Whether get(endpoint, ttl, **params) would be answered from the cache, with no request."""
+    return request_url(endpoint, ttl, **params) is None
+
+
+def request_url(endpoint, ttl=FOREVER, **params):
+    """The URL get(endpoint, ttl, **params) would request, or None if the cache would answer it."""
     if offline:
-        return True
+        return None
+    url = _build_url(endpoint, params)
+    cached = _read_cached(_cache_path(url))
+    if cached is not None and (ttl is FOREVER or time.time() - cached["fetched"] < ttl):
+        return None
+    return url
+
+
+def peek(endpoint, **params):
+    """The cached answer to get(endpoint, **params) however old it is, or None: no request."""
     cached = _read_cached(_cache_path(_build_url(endpoint, params)))
-    return cached is not None and (ttl is FOREVER or time.time() - cached["fetched"] < ttl)
+    return None if cached is None else cached["data"]
 
 
 def get(endpoint, ttl=FOREVER, cache=True, fetched_after=None, record=None, **params):

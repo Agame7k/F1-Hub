@@ -20,7 +20,7 @@ from statistics import median
 
 from . import api, ff1
 from . import progress as prog
-from .analysis import WET_COMPOUNDS, Source, _drivers, _overlaps, _ts
+from .analysis import WET_COMPOUNDS, Source, _drivers, _overlaps, _ts, session_reads
 from .quali import _is_deleted, deleted_laps
 from .racecontrol import neutral_periods
 from .season import Season, _session_over
@@ -430,17 +430,20 @@ def session_endpoints(session):
     return SESSION_ENDPOINTS + (RACE_ENDPOINTS if session.get("session_type") == "Race" else ())
 
 
-def session_requests(session):
+def session_requests(session, seen=None):
     """How many OpenF1 requests compile_session will send for a session: what it reads that isn't cached (and
-    fresh). FastF1 sessions send none (FastF1 has its own cache)."""
-    key = session["session_key"]
-    if ff1.is_key(key):
+    fresh). seen: URLs already counted for earlier sessions (a meeting's details are fetched once for all its
+    sessions), added to. FastF1 sessions send none (FastF1 has its own cache)."""
+    if ff1.is_key(session["session_key"]):
         return 0
-    end = _ts(session.get("date_end")) or 0
-    ttl = api.FOREVER if time.time() - end > FINAL_AFTER else 600          # as analysis.Source
-    n = (not api.is_cached("sessions", ttl=3600, session_key=int(key))) + \
-        (not api.is_cached("meetings", ttl=6 * 3600, meeting_key=session.get("meeting_key")))
-    return n + sum(not api.is_cached(e, ttl=ttl, session_key=int(key)) for e in session_endpoints(session))
+    seen = set() if seen is None else seen
+    n = 0
+    for endpoint, ttl, params in session_reads(session, session_endpoints(session)):
+        url = api.request_url(endpoint, ttl, **params)
+        if url and url not in seen:
+            seen.add(url)
+            n += 1
+    return n
 
 
 def compile_session(db, session, rnd, year):
@@ -532,7 +535,8 @@ def compile_season(year, kinds=DEFAULT_KINDS, path=None, refresh=False, progress
                "radio": None}
     try:
         todo = _sessions_todo(db, season, names, rounds, refresh, summary)
-        prog.begin(progress, "sessions", len(todo), [session_requests(s) for _, s, _ in todo])
+        seen = set()
+        prog.begin(progress, "sessions", len(todo), [session_requests(s, seen) for _, s, _ in todo])
         for rnd, s, label in todo:
             progress(label)
             try:
@@ -609,13 +613,14 @@ def plan_season(year, kinds=DEFAULT_KINDS, path=None, refresh=False, telemetry=(
     db = connect(path)
     try:
         todo = _sessions_todo(db, season, names, rounds, refresh, summary)
-        phases = [("sessions", len(todo), sum(session_requests(s) for _, s, _ in todo))]
+        seen = set()
+        phases = [("sessions", len(todo), sum(session_requests(s, seen) for _, s, _ in todo))]
         if telemetry:
             tel_names = {n for k in telemetry for n in tel.TEL_KINDS[k]}
             planned = [dict(s) for s in _telemetry_todo(db, telemetry, rounds, refresh)]
-            seen = {s["session_key"] for s in planned}
-            planned += [s for _, s, _ in todo if s["session_name"] in tel_names and s["session_key"] not in seen]
-            phases.append(("telemetry", len(planned), sum(_telemetry_requests(db, path, s) for s in planned)))
+            measured = {s["session_key"] for s in planned}
+            planned += [s for _, s, _ in todo if s["session_name"] in tel_names and s["session_key"] not in measured]
+            phases.append(("telemetry", len(planned), sum(_telemetry_requests(db, path, s, seen) for s in planned)))
         meetings = {(r.number, r.meeting_key) for r in season.rounds if not r.cancelled and (not rounds or r.number in rounds)
                     and any(_session_over(s) for s in r.sessions.values())}
         if stewards:
@@ -634,15 +639,19 @@ def plan_season(year, kinds=DEFAULT_KINDS, path=None, refresh=False, telemetry=(
 TYPICAL_DRIVERS = 20
 
 
-def _telemetry_requests(db, path, session):
+def _telemetry_requests(db, path, session, seen=None):
     """Requests telemetry.compile_session will send for a session: two (car data, location) a driver whose raw
-    telemetry isn't kept yet, plus the meeting if that isn't cached."""
+    telemetry isn't kept yet, plus the meeting if that isn't cached (or in seen: URLs already counted, added to)."""
     from . import telemetry as tel
     key = session["session_key"]
     drivers = [n for (n,) in db.execute("SELECT driver_number FROM drivers WHERE session_key = ?", (key,))]
     folder = tel.raw_dir(path.parent, key)
     missing = sum(not (folder / f"{n}.json.gz").exists() for n in drivers) if drivers else TYPICAL_DRIVERS
-    return 2 * missing + (not api.is_cached("meetings", meeting_key=session.get("meeting_key")))
+    seen = set() if seen is None else seen
+    url = api.request_url("meetings", meeting_key=session.get("meeting_key"))
+    new = bool(url) and url not in seen
+    seen.add(url)
+    return 2 * missing + new
 
 
 def fia_errors():
@@ -672,7 +681,8 @@ def _compile_telemetry(db, path, kinds, rounds, refresh, summary, progress):
     The raw telemetry is kept next to the dataset, so measuring again needs no download."""
     from . import telemetry
     todo = _telemetry_todo(db, kinds, rounds, refresh)
-    prog.begin(progress, "telemetry", len(todo), [_telemetry_requests(db, path, s) for s in todo])
+    seen = set()
+    prog.begin(progress, "telemetry", len(todo), [_telemetry_requests(db, path, s, seen) for s in todo])
     for s in todo:
         label = f"R{s['round']} {s['meeting_name']} - {s['session_name']}"
         try:
