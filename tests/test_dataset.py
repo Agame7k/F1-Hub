@@ -283,6 +283,28 @@ class Dataset(unittest.TestCase):
         with mock.patch.object(api, "offline", False):
             self.assertEqual(dataset._telemetry_requests(self.db, self.path, row), 2 * 2 + 1)
 
+    def test_recompiling_keeps_telemetry_until_it_is_measured_again(self):
+        self.db.execute("INSERT INTO tel_sessions (session_key, drivers) VALUES (?, 2)", (RACE,))
+        self.db.execute("INSERT INTO meta VALUES (?, '1')", (f"tel_v:{RACE}",))
+        self.db.commit()
+        dataset.compile_season(2025, path=self.path, refresh=True)
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM tel_sessions").fetchone()[0], 1)    # still there
+        self.assertIsNone(self.db.execute("SELECT 1 FROM meta WHERE key = ?", (f"tel_v:{RACE}",)).fetchone())
+        db = dataset.connect(self.path)
+        try:
+            self.assertEqual([s["session_key"] for s in dataset._telemetry_todo(db, ("race",), None, False)], [RACE])
+        finally:
+            db.close()
+
+    def test_telemetry_with_gaps_is_reported(self):
+        from f1hub import telemetry
+        with mock.patch.object(telemetry, "compile_session", return_value=1):     # 1 of the race's 12 laps
+            _, summary = dataset.compile_season(2025, path=self.path, telemetry=("race",))
+        self.assertEqual(summary["telemetry_gaps"], [("R1 Australian Grand Prix - Race", 1, 12, True)])
+        with mock.patch.object(telemetry, "compile_session", return_value=11):
+            _, summary = dataset.compile_season(2025, path=self.path, telemetry=("race",), refresh=True)
+        self.assertEqual(summary["telemetry_gaps"], [])
+
     def test_settled_session_details_are_kept_for_good(self):
         from f1hub import analysis
         old = {"session_key": 1, "meeting_key": 7, "date_end": "2025-03-16T06:00:00+00:00"}

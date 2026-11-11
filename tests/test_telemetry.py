@@ -197,5 +197,32 @@ class Telemetry(unittest.TestCase):
         self.assertEqual((lap["lico_count"], lap["lico_time"]), (1, 1.25))
 
 
+class RawFiles(unittest.TestCase):
+    """Raw telemetry saved before its session settled (OpenF1 still filling gaps) is downloaded again later."""
+    END = datetime(2025, 6, 1, 15, 0, tzinfo=timezone.utc).timestamp()
+    SESSION = {"date_end": "2025-06-01T15:00:00+00:00"}
+
+    def saved(self, at):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = Path(tmp.name) / "1.json.gz"
+        path.write_bytes(b"")
+        import os
+        os.utime(path, (at, at))
+        return path
+
+    def test_saved_after_settling_is_kept_for_good(self):
+        path = self.saved(self.END + 5 * 86400)
+        self.assertTrue(telemetry.raw_current(path, self.SESSION, now=self.END + 400 * 86400))
+
+    def test_saved_before_settling_is_reused_only_for_a_while(self):
+        path = self.saved(self.END + 3600)
+        self.assertTrue(telemetry.raw_current(path, self.SESSION, now=self.END + 2 * 3600))
+        self.assertFalse(telemetry.raw_current(path, self.SESSION, now=self.END + 3600 + telemetry.RECHECK + 1))
+
+    def test_missing_file(self):
+        self.assertFalse(telemetry.raw_current(Path("/nonexistent/1.json.gz"), self.SESSION))
+
+
 if __name__ == "__main__":
     unittest.main()

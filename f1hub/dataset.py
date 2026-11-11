@@ -20,7 +20,7 @@ from statistics import median
 
 from . import api, ff1
 from . import progress as prog
-from .analysis import WET_COMPOUNDS, Source, _drivers, _overlaps, _ts, session_reads
+from .analysis import WET_COMPOUNDS, Source, _drivers, _overlaps, _ts, session_reads, settled
 from .quali import _is_deleted, deleted_laps
 from .racecontrol import neutral_periods
 from .season import Season, _session_over
@@ -465,8 +465,12 @@ def compile_session(db, session, rnd, year):
     grid, grid_source = _grid(src, rnd, session) if is_race else ({}, None)
 
     for t in TABLES:
-        if t not in EXTRA_TABLES:       # stewards' decisions and radio are kept: they're compiled on their own
+        # kept: stewards' decisions and radio (compiled on their own), and the telemetry measurements - only marked
+        # out of date, so the telemetry step measures the session again and replaces them. (Deleting them here
+        # lost a season's telemetry when a --refresh was stopped between the two steps.)
+        if t not in EXTRA_TABLES and t not in TEL_TABLES:
             db.execute(f"DELETE FROM {t} WHERE session_key = ?", (key,))
+    db.execute("DELETE FROM meta WHERE key = ?", (f"tel_v:{key}",))
     end = _ts(session.get("date_end")) or 0
     _insert(db, "sessions", [{
         "session_key": key, "year": year, "round": rnd.number, "meeting_key": session.get("meeting_key"),
@@ -531,7 +535,8 @@ def compile_season(year, kinds=DEFAULT_KINDS, path=None, refresh=False, progress
     season = Season(year).load(lambda m: progress(f"season: {m}"))
     names = {n for k in kinds for n in KINDS[k]}
     db = connect(path)
-    summary = {"compiled": [], "skipped": [], "pending": [], "failed": [], "telemetry": [], "stewards": None,
+    summary = {"compiled": [], "skipped": [], "pending": [], "failed": [], "telemetry": [], "telemetry_gaps": [],
+               "stewards": None,
                "radio": None}
     try:
         todo = _sessions_todo(db, season, names, rounds, refresh, summary)
@@ -637,6 +642,7 @@ def plan_season(year, kinds=DEFAULT_KINDS, path=None, refresh=False, telemetry=(
 
 
 TYPICAL_DRIVERS = 20
+TEL_COMPLETE = 0.5       # a session's telemetry with fewer of its timed laps measured than this has gaps
 
 
 def _telemetry_requests(db, path, session, seen=None):
@@ -646,7 +652,7 @@ def _telemetry_requests(db, path, session, seen=None):
     key = session["session_key"]
     drivers = [n for (n,) in db.execute("SELECT driver_number FROM drivers WHERE session_key = ?", (key,))]
     folder = tel.raw_dir(path.parent, key)
-    missing = sum(not (folder / f"{n}.json.gz").exists() for n in drivers) if drivers else TYPICAL_DRIVERS
+    missing = sum(not tel.raw_current(folder / f"{n}.json.gz", session) for n in drivers) if drivers else TYPICAL_DRIVERS
     seen = set() if seen is None else seen
     url = api.request_url("meetings", meeting_key=session["meeting_key"])
     new = bool(url) and url not in seen
@@ -700,7 +706,11 @@ def _compile_telemetry(db, path, kinds, rounds, refresh, summary, progress):
         db.execute("INSERT OR REPLACE INTO meta VALUES (?, ?)", (f"tel_v:{s['session_key']}", str(telemetry.VERSION)))
         db.commit()
         summary["telemetry"].append((label, n))
-        prog.done(progress, label, f"{n} laps measured")
+        timed = db.execute("SELECT COUNT(*) FROM laps WHERE session_key = ? AND lap_time IS NOT NULL "
+                           "AND date_start IS NOT NULL", (s["session_key"],)).fetchone()[0]
+        if timed and n < TEL_COMPLETE * timed:
+            summary["telemetry_gaps"].append((label, n, timed, settled(dict(s))))
+        prog.done(progress, label, f"{n} of {timed} laps measured")
 
 
 # ------------------------------------------------------------------------------------------------ reading it back

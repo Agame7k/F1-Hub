@@ -32,6 +32,7 @@ from . import api
 log = logging.getLogger(__name__)
 
 WORKERS = 3              # drivers fetched at once (OpenF1's rate limits still apply to all of them together)
+RECHECK = 6 * 3600       # s raw telemetry saved before its session settled is reused before it's downloaded again
 TEL_KINDS = {"quali": ("Qualifying", "Sprint Qualifying"), "race": ("Race", "Sprint")}
 MIN_DROP = 12            # km/h a corner's speed must drop from the fastest point before it
 MERGE = 140              # m: speed minima closer than this are one corner (a chicane)
@@ -71,6 +72,18 @@ def _columns(car, loc, t0):
             "loc": {"t": [ms(r) for r in loc], "x": [r.get("x") or 0 for r in loc], "y": [r.get("y") or 0 for r in loc]}}
 
 
+def raw_current(path, session, now=None):
+    """Whether a kept raw telemetry file can be reused. OpenF1 fills gaps in a session's data in the days after it,
+    so a file saved before the session settled (analysis.SETTLED) is downloaded again - but not more often than
+    every RECHECK, or each compile of a recent session would download it all again."""
+    from .analysis import SETTLED
+    try:
+        saved = path.stat().st_mtime
+    except OSError:
+        return False
+    return saved - (_ts(session["date_end"]) or 0) > SETTLED or (now or time.time()) - saved < RECHECK
+
+
 def fetch_session(session, drivers, data_dir, progress=lambda msg: None):
     """Fetch (or reuse) every driver's raw telemetry for a session. Returns {driver_number: columns}."""
     folder = raw_dir(data_dir, session["session_key"])
@@ -83,7 +96,7 @@ def fetch_session(session, drivers, data_dir, progress=lambda msg: None):
 
     def one(n):
         path = folder / f"{n}.json.gz"
-        if path.exists():
+        if raw_current(path, session):
             try:
                 with gzip.open(path, "rt", encoding="utf-8") as f:
                     return n, json.load(f)

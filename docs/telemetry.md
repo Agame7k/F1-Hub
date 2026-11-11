@@ -25,7 +25,12 @@ time.
 
 - **Keeping it.** The raw telemetry is kept, gzipped, in `.f1data/telemetry/<session_key>/`, one file per
   driver. Measuring again (after an F1 Hub update, or with `--refresh`) needs no download.
+  The exception is telemetry saved within four days of the session: OpenF1 often fills gaps in that time, so
+  it is downloaded again on a compile after the session settles (but not more than once every six hours before).
 - **Resuming.** An interrupted download carries on from the drivers already saved.
+- **Gaps.** A session with fewer than half its timed laps measured is listed at the end of the compile
+  ("Telemetry incomplete"): OpenF1's data has holes there. For a settled session, deleting its folder in
+  `.f1data/telemetry/` and compiling it again downloads it fresh, in case OpenF1 has fixed it since.
 - **What goes in the dataset.** Only the measurements, not the millions of raw samples.
 
 ## How it works

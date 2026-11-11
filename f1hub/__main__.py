@@ -209,6 +209,9 @@ def cmd_compile(args):
     if summary["telemetry"]:
         print(f"  Telemetry measured for {len(summary['telemetry'])} sessions "
               f"({sum(n for _, n in summary['telemetry'])} laps)")
+    for label, n, timed, final in summary.get("telemetry_gaps", ()):
+        print(c(f"  Telemetry incomplete: {label}: {n} of {timed} laps measured", "FFB000") +
+              dim(" - OpenF1's data has gaps" + ("" if final else "; it's downloaded again once the session settles")))
     for label, why in summary["failed"]:
         print(c(f"  Could not compile {label}: {why}", "FFB000"))
     db = dataset.connect(path)
