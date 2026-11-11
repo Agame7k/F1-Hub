@@ -111,6 +111,7 @@ python3 -m f1hub cars 2025               # car characteristics and circuit group
 python3 -m f1hub model 2025              # lap-time model: corrected pace, degradation (--round N for one race)
 python3 -m f1hub strategy 2025           # strategies, graded pit calls, predictions, title odds (--round N, --grade)
 python3 -m f1hub compile 2025 --stewards --radio   # ... with stewards' decisions and transcribed team radio
+python3 -m f1hub compile 2025 --full     # everything for the season (--plan first to see what it needs)
 python3 -m f1hub stewards 2025           # stewarding consistency: outcomes by offence, similar decisions
 python3 -m f1hub radio 2025              # team radio by topic, checked against the data
 python3 -m f1hub reliability             # retirements since 1950 by team, decade, power unit (--fetch first)

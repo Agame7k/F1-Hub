@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
-from f1hub import dataset
+from f1hub import api, dataset
 from f1hub.season import Round
 from isolation import setUpModule, tearDownModule  # noqa: F401  (offline, temporary cache)
 
@@ -253,6 +253,28 @@ class Dataset(unittest.TestCase):
         self.assertEqual(len(paths), len(dataset.TABLES) + 1)
         self.assertEqual(len(rows), 12)
         self.assertEqual(rows[0]["code"], "VER")
+
+    def test_endpoint_list_matches_what_is_read(self):
+        # the plan counts requests from session_endpoints: it must be what compile_session actually reads
+        race = FakeSeason(2025).rounds[0].sessions["Race"]
+        quali = FakeSeason(2025).rounds[0].sessions["Qualifying"]
+        for s in (race, quali):
+            got = {e for k, e in FakeSource.fetched if k == s["session_key"]}
+            self.assertEqual(got, set(dataset.session_endpoints(s)), s["session_name"])
+
+    def test_plan_counts_what_is_not_cached(self):
+        plan = dataset.plan_season(2025, path=self.path)
+        self.assertEqual((plan["phases"], len(plan["skipped"])), ([("sessions", 0, 0)], 2))
+        with mock.patch.object(api, "offline", False):
+            plan = dataset.plan_season(2025, path=self.path, refresh=True, telemetry=("quali", "race"))
+            # quali: 7 endpoints, race: 11, each + sessions + meetings; telemetry: 2 drivers x 2 + meetings
+            self.assertEqual(plan["phases"], [("sessions", 2, 22), ("telemetry", 2, 10)])
+            api._write_cached(api._cache_path(api._build_url("laps", {"session_key": RACE})), "", [])
+            raw = Path(self.tmp.name) / "telemetry" / str(RACE)
+            raw.mkdir(parents=True)
+            (raw / "1.json.gz").write_bytes(b"")
+            plan = dataset.plan_season(2025, path=self.path, refresh=True, telemetry=("quali", "race"))
+            self.assertEqual(plan["phases"], [("sessions", 2, 21), ("telemetry", 2, 8)])
 
     def test_old_schema_is_rebuilt(self):
         self.db.execute("UPDATE meta SET value = '0' WHERE key = 'schema_version'")

@@ -12,6 +12,8 @@ python3 -m f1hub compile 2025 --out my.sqlite   # somewhere else
 python3 -m f1hub compile 2025 --telemetry       # also measure every corner from car telemetry (telemetry.md)
 python3 -m f1hub compile 2025 --stewards --radio   # also stewards' decisions and team radio (racecontrol.md)
 python3 -m f1hub compile 2025 --round 20-24     # only these rounds
+python3 -m f1hub compile 2025 --full            # everything: practice, quali and race telemetry, stewards, radio
+python3 -m f1hub compile 2025 --plan            # what a compile would fetch and its minimum time, then stop
 ```
 
 - Only finished sessions are compiled. A session's results count as final four days after it ends; until then
@@ -19,6 +21,9 @@ python3 -m f1hub compile 2025 --round 20-24     # only these rounds
 - Final sessions are skipped, so re-running after each race only fetches the new one.
 - Everything goes through the normal OpenF1 cache and rate limits. The first compile of a season makes about
   ten requests per session (a few minutes at OpenF1's 60 requests a minute); after that it is mostly cached.
+- Before it starts, a compile counts the requests each step still needs (what isn't cached, and for telemetry the
+  drivers whose raw data isn't kept) and prints that plan. The progress line's ETA comes from those counts: at the
+  rate limit's pace at first (shown as `ETA >=`, a lower bound), then from what the finished steps actually took.
 - Seasons from 2023 (OpenF1). Older seasons through FastF1 are on the roadmap.
 - `F1HUB_DATA` changes the default folder (`.f1data/`). A file built by an older version of F1 Hub is rebuilt.
 

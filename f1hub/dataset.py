@@ -18,7 +18,7 @@ from collections import Counter
 from pathlib import Path
 from statistics import median
 
-from . import api
+from . import api, ff1
 from . import progress as prog
 from .analysis import WET_COMPOUNDS, Source, _drivers, _overlaps, _ts
 from .quali import _is_deleted, deleted_laps
@@ -421,8 +421,30 @@ def _grid(src, rnd, session):
     return {}, None
 
 
+# what compile_session reads, so a compile can count its requests before it starts (keep the two in step)
+SESSION_ENDPOINTS = ("drivers", "race_control", "weather", "pit", "stints", "session_result", "laps")
+RACE_ENDPOINTS = ("position", "intervals", "overtakes", "starting_grid")
+
+
+def session_endpoints(session):
+    return SESSION_ENDPOINTS + (RACE_ENDPOINTS if session.get("session_type") == "Race" else ())
+
+
+def session_requests(session):
+    """How many OpenF1 requests compile_session will send for a session: what it reads that isn't cached (and
+    fresh). FastF1 sessions send none (FastF1 has its own cache)."""
+    key = session["session_key"]
+    if ff1.is_key(key):
+        return 0
+    end = _ts(session.get("date_end")) or 0
+    ttl = api.FOREVER if time.time() - end > FINAL_AFTER else 600          # as analysis.Source
+    n = (not api.is_cached("sessions", ttl=3600, session_key=int(key))) + \
+        (not api.is_cached("meetings", ttl=6 * 3600, meeting_key=session.get("meeting_key")))
+    return n + sum(not api.is_cached(e, ttl=ttl, session_key=int(key)) for e in session_endpoints(session))
+
+
 def compile_session(db, session, rnd, year):
-    """Fetch one session and (re)write its rows in every table."""
+    """Fetch one session and (re)write its rows in every table (it reads session_endpoints)."""
     key = session["session_key"]
     src = Source(key)
     stype = session.get("session_type")
@@ -509,22 +531,8 @@ def compile_season(year, kinds=DEFAULT_KINDS, path=None, refresh=False, progress
     summary = {"compiled": [], "skipped": [], "pending": [], "failed": [], "telemetry": [], "stewards": None,
                "radio": None}
     try:
-        final = {k for (k,) in db.execute("SELECT session_key FROM sessions WHERE final = 1")}
-        todo = []
-        for rnd in season.rounds:
-            if rnd.cancelled or (rounds and rnd.number not in rounds):
-                continue
-            for name, s in sorted(rnd.sessions.items(), key=lambda kv: kv[1].get("date_start") or ""):
-                if name not in names:
-                    continue
-                label = f"R{rnd.number} {rnd.name} - {name}"
-                if not _session_over(s):
-                    summary["pending"].append(label)
-                elif s["session_key"] in final and not refresh:
-                    summary["skipped"].append(label)
-                else:
-                    todo.append((rnd, s, label))
-        prog.begin(progress, "sessions", len(todo))
+        todo = _sessions_todo(db, season, names, rounds, refresh, summary)
+        prog.begin(progress, "sessions", len(todo), [session_requests(s) for _, s, _ in todo])
         for rnd, s, label in todo:
             progress(label)
             try:
@@ -568,14 +576,82 @@ def compile_season(year, kinds=DEFAULT_KINDS, path=None, refresh=False, progress
     return path, summary
 
 
+def _sessions_todo(db, season, names, rounds, refresh, summary):
+    """[(round, session, label)] to compile; the rest go in summary's "pending" and "skipped"."""
+    final = {k for (k,) in db.execute("SELECT session_key FROM sessions WHERE final = 1")}
+    todo = []
+    for rnd in season.rounds:
+        if rnd.cancelled or (rounds and rnd.number not in rounds):
+            continue
+        for name, s in sorted(rnd.sessions.items(), key=lambda kv: kv[1].get("date_start") or ""):
+            if name not in names:
+                continue
+            label = f"R{rnd.number} {rnd.name} - {name}"
+            if not _session_over(s):
+                summary["pending"].append(label)
+            elif s["session_key"] in final and not refresh:
+                summary["skipped"].append(label)
+            else:
+                todo.append((rnd, s, label))
+    return todo
+
+
+def plan_season(year, kinds=DEFAULT_KINDS, path=None, refresh=False, telemetry=(), rounds=None, stewards=False,
+                radio=False, progress=lambda msg: None):
+    """What compile_season would do, without doing it: {"phases": [(phase, units, requests or None)], "skipped",
+    "pending"}. requests counts what isn't cached; None where it can't be known (fia.com, Whisper). Sessions not
+    compiled yet are planned with TYPICAL_DRIVERS cars for their telemetry."""
+    from . import telemetry as tel
+    path = Path(path or default_path(year))
+    season = Season(year).load(lambda m: progress(f"season: {m}"))
+    names = {n for k in kinds for n in KINDS[k]}
+    summary = {"pending": [], "skipped": []}
+    db = connect(path)
+    try:
+        todo = _sessions_todo(db, season, names, rounds, refresh, summary)
+        phases = [("sessions", len(todo), sum(session_requests(s) for _, s, _ in todo))]
+        if telemetry:
+            tel_names = {n for k in telemetry for n in tel.TEL_KINDS[k]}
+            planned = [dict(s) for s in _telemetry_todo(db, telemetry, rounds, refresh)]
+            seen = {s["session_key"] for s in planned}
+            planned += [s for _, s, _ in todo if s["session_name"] in tel_names and s["session_key"] not in seen]
+            phases.append(("telemetry", len(planned), sum(_telemetry_requests(db, path, s) for s in planned)))
+        meetings = {(r.number, r.meeting_key) for r in season.rounds if not r.cancelled and (not rounds or r.number in rounds)
+                    and any(_session_over(s) for s in r.sessions.values())}
+        if stewards:
+            done = {k for (k,) in db.execute("SELECT meeting_key FROM stew_events WHERE final = 1")}
+            phases.append(("stewards", len({m for m in meetings if refresh or m[1] not in done}), None))
+        if radio:
+            done = {k for (k,) in db.execute("SELECT session_key FROM radio_sessions WHERE transcribed >= clips")}
+            races = [s for r in season.rounds if (r.number, r.meeting_key) in meetings
+                     for n, s in r.sessions.items() if n == "Race" and _session_over(s)]
+            phases.append(("team radio", len([s for s in races if refresh or s["session_key"] not in done]), None))
+    finally:
+        db.close()
+    return {"phases": phases, **summary}
+
+
+TYPICAL_DRIVERS = 20
+
+
+def _telemetry_requests(db, path, session):
+    """Requests telemetry.compile_session will send for a session: two (car data, location) a driver whose raw
+    telemetry isn't kept yet, plus the meeting if that isn't cached."""
+    from . import telemetry as tel
+    key = session["session_key"]
+    drivers = [n for (n,) in db.execute("SELECT driver_number FROM drivers WHERE session_key = ?", (key,))]
+    folder = tel.raw_dir(path.parent, key)
+    missing = sum(not (folder / f"{n}.json.gz").exists() for n in drivers) if drivers else TYPICAL_DRIVERS
+    return 2 * missing + (not api.is_cached("meetings", meeting_key=session.get("meeting_key")))
+
+
 def fia_errors():
     from .fia import FIAError
     return (FIAError,)
 
 
-def _compile_telemetry(db, path, kinds, rounds, refresh, summary, progress):
-    """Per-corner telemetry for the dataset's sessions of these kinds that don't have it yet (all with refresh).
-    The raw telemetry is kept next to the dataset, so measuring again needs no download."""
+def _telemetry_todo(db, kinds, rounds, refresh):
+    """The dataset's sessions of these kinds whose telemetry isn't measured yet (all of them with refresh)."""
     from . import telemetry
     names = [n for k in kinds for n in telemetry.TEL_KINDS[k]]
     marks = ",".join("?" * len(names))
@@ -588,8 +664,15 @@ def _compile_telemetry(db, path, kinds, rounds, refresh, summary, progress):
         sessions = db.execute(f"SELECT * FROM sessions WHERE session_name IN ({marks}) ORDER BY date_start", names).fetchall()
     finally:
         db.row_factory = None
-    todo = [s for s in sessions if not ((rounds and s["round"] not in rounds) or (s["session_key"] in done and not refresh))]
-    prog.begin(progress, "telemetry", len(todo))
+    return [s for s in sessions if not ((rounds and s["round"] not in rounds) or (s["session_key"] in done and not refresh))]
+
+
+def _compile_telemetry(db, path, kinds, rounds, refresh, summary, progress):
+    """Per-corner telemetry for the dataset's sessions of these kinds that don't have it yet (all with refresh).
+    The raw telemetry is kept next to the dataset, so measuring again needs no download."""
+    from . import telemetry
+    todo = _telemetry_todo(db, kinds, rounds, refresh)
+    prog.begin(progress, "telemetry", len(todo), [_telemetry_requests(db, path, s) for s in todo])
     for s in todo:
         label = f"R{s['round']} {s['meeting_name']} - {s['session_name']}"
         try:

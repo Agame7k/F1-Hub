@@ -10,6 +10,8 @@
     python3 -m f1hub export results.json
     python3 -m f1hub compile 2025         the whole season as one SQLite dataset (add --csv DIR for CSV files)
     python3 -m f1hub compile 2025 --telemetry     ... with every corner measured from telemetry (qualifying)
+    python3 -m f1hub compile 2025 --full          ... everything: practice, all telemetry, stewards, team radio
+    python3 -m f1hub compile 2025 --plan          what a compile would fetch (and how long, at least), then stop
     python3 -m f1hub model 2025           the lap-time model: corrected race pace, degradation, fuel, dirty air
     python3 -m f1hub cars 2025            car characteristics and circuit groups (needs compile --telemetry)
     python3 -m f1hub live                 live timing for the session running now (paid OpenF1 login)
@@ -138,16 +140,55 @@ def cmd_export(season, path):
     print(f"Wrote {path}")
 
 
+def _print_plan(year, plan, pace):
+    """The plan with a time for each step: from how fast earlier compiles went (~), or OpenF1's rate limit alone
+    (>=, a lower bound) for a step no compile has timed yet."""
+    from .progress import fmt_duration
+    print(c(f"\n  {year} compile plan", "E10600", bold=True))
+    unit = {"sessions": "sessions", "telemetry": "sessions", "stewards": "Grands Prix", "team radio": "races"}
+    note = {"stewards": "fia.com, a few PDFs a minute", "team radio": "Whisper, an hour or more a season"}
+    total, untimed, work = 0.0, [], False
+    for phase, n, req in plan["phases"]:
+        if not n:
+            print(f"    {phase:11s} {n:4d} {unit.get(phase, ''):12s} " + dim("nothing to do"))
+            continue
+        work = True
+        t, known = pace.estimate(phase, n, req or 0)
+        if not known:
+            untimed.append(phase)
+        if req is None and not known:
+            what = dim(note.get(phase, ""))
+        else:
+            total += t
+            what = (f"{req:,} requests  " if req is not None else "") + dim(f"{'~' if known else '>='}{fmt_duration(t)}")
+        print(f"    {phase:11s} {n:4d} {unit.get(phase, ''):12s} {what}")
+    print(dim(f"    {len(plan['skipped'])} sessions already up to date, {len(plan['pending'])} not run yet"))
+    if work:
+        print(f"  {'~' if not untimed else 'at least '}{fmt_duration(total)}" + dim(
+            f"  (not timed yet: {', '.join(untimed)} - a compile keeps each step's real pace for next time)"
+            if untimed else "  (from how fast earlier compiles went)"))
+
+
 def cmd_compile(args):
     from . import dataset
+    if args.full:
+        args.practice, args.stewards, args.radio = True, True, True
+        args.telemetry = "all"
     kinds = dataset.DEFAULT_KINDS + (("practice",) if args.practice else ())
     year = args.season or args.year
-
-    from .progress import Reporter
-    progress = Reporter(sys.stderr, style=dim)
-    t0 = datetime.now()
     tel = {"quali": ("quali",), "race": ("race",), "all": ("quali", "race")}.get(args.telemetry, ())
     rounds = _rounds(args.round) if args.round else None
+    plan = dataset.plan_season(year, kinds, args.out, args.refresh, telemetry=tel, rounds=rounds,
+                               stewards=args.stewards, radio=args.radio)
+    from .progress import Pace, Reporter
+    pace = Pace(dataset.DATA_DIR / "compile_pace.json", api.SECONDS_PER_REQUEST)
+    _print_plan(year, plan, pace)
+    if args.plan:
+        return 0
+    print()
+
+    progress = Reporter(sys.stderr, style=dim, requests=api.request_count, pace=pace)
+    t0 = datetime.now()
     try:
         path, summary = dataset.compile_season(year, kinds, args.out, args.refresh, progress, telemetry=tel,
                                                rounds=rounds, stewards=args.stewards, radio=args.radio)
@@ -552,6 +593,10 @@ def main(argv=None):
                     help="also read every stewards' decision from fia.com (a few PDFs a minute; kept)")
     co.add_argument("--radio", action="store_true",
                     help="also add the races' team radio, transcribed with Whisper (an hour or more a season; kept)")
+    co.add_argument("--full", action="store_true",
+                    help="everything: practice, telemetry for qualifying and races, stewards and team radio")
+    co.add_argument("--plan", action="store_true",
+                    help="only show what would be compiled and how many requests it needs, then stop")
     ca = sub.add_parser("cars", help="car characteristics and circuit groups (from compile --telemetry)")
     ca.add_argument("season", nargs="?", type=int, help="the year (default: --year)")
     sg = sub.add_parser("strategy", help="strategy simulation, pit-call grading and race predictions")

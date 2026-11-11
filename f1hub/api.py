@@ -66,6 +66,8 @@ def write_atomic(path, data):
 
 RATE_LIMITS = [(6, 1.0), (60, 60.0)]   # OpenF1 REST: 6 requests/second and 60 requests/minute
 FOREVER = None
+# the sustained pace those limits allow: the slowest of them (1 s a request at 60 a minute)
+SECONDS_PER_REQUEST = max(window / limit for limit, window in RATE_LIMITS)
 
 
 class LiveSessionLock(Exception):
@@ -77,6 +79,12 @@ class APIError(Exception):
 
 
 _sent = collections.deque()   # timestamps of recent requests
+_count = [0]                  # requests sent since start-up (progress ETAs)
+
+
+def request_count():
+    """How many requests have gone to OpenF1 so far (retries included)."""
+    return _count[0]
 
 
 _throttle_lock = threading.Lock()     # feed thread, stream thread and web requests share the budget
@@ -104,6 +112,7 @@ def _throttle_once():
             waits.append(window - (now - recent[-limit]) + 0.01)
     if not waits:
         _sent.append(now)
+        _count[0] += 1
         return None
     return max(waits)
 
@@ -202,6 +211,14 @@ def _build_url(endpoint, params):
                 v = str(v).lower()
             parts.append(urllib.parse.quote(key) + (op or "=") + urllib.parse.quote(str(v)))
     return BASE + endpoint + ("?" + "&".join(parts) if parts else "")
+
+
+def is_cached(endpoint, ttl=FOREVER, **params):
+    """Whether get(endpoint, ttl, **params) would be answered from the cache, with no request."""
+    if offline:
+        return True
+    cached = _read_cached(_cache_path(_build_url(endpoint, params)))
+    return cached is not None and (ttl is FOREVER or time.time() - cached["fetched"] < ttl)
 
 
 def get(endpoint, ttl=FOREVER, cache=True, fetched_after=None, record=None, **params):
